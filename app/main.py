@@ -1,10 +1,11 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse
+from pathlib import Path
 from .database import Base, engine
 from .seed import seed_database
-from .routes import cases, dashboard, analytics, predictions, ai
+from .routes import cases, dashboard, analytics, predictions, ai, metadata
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -24,17 +25,12 @@ app.include_router(dashboard.router)
 app.include_router(analytics.router)
 app.include_router(predictions.router)
 app.include_router(ai.router)
+app.include_router(metadata.router)
 
 @app.get("/health")
 def health():
     return {"status": "ok", "application": "MOAI Legal Case Analytics"}
 
-@app.get("/", response_class=HTMLResponse)
+@app.get("/")
 def home():
-    return """<html><head><title>MOAI Legal Case Analytics</title></head>
-    <body style="font-family:Arial,sans-serif;max-width:760px;margin:60px auto;padding:0 20px">
-    <h1>MOAI Legal Case Analytics</h1><p>Backend foundation is running.</p><ul>
-    <li><a href="/docs">API documentation</a></li><li><a href="/health">Health check</a></li>
-    <li><a href="/api/dashboard/overview">Dashboard overview API</a></li>
-    <li><a href="/api/ai/status">OpenRouter configuration status</a></li></ul>
-    <p>Research estimates are not legal advice and are not guaranteed outcomes.</p></body></html>"""
+    return FileResponse(Path(__file__).resolve().parent / "static" / "index.html")
