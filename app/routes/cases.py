@@ -1,9 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 from ..database import get_db
-from ..models import CaseRecord, Jurisdiction, Court
-from ..schemas import CaseCreate, CaseOut
+from ..models import CaseRecord, Jurisdiction, Court, Offence, CaseOffence, CaseOutcome, Sentence, CaseSource
+from ..schemas import CaseCreate, CaseOut, ResearchDataCreate
 
 router = APIRouter(prefix="/api/cases", tags=["Cases"])
 
@@ -37,6 +37,69 @@ def create_case(payload: CaseCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(item)
     return item
+
+@router.get("/{case_id}/research")
+def get_case_research(case_id: int, db: Session = Depends(get_db)):
+    item = db.scalar(select(CaseRecord).where(CaseRecord.id == case_id).options(
+        selectinload(CaseRecord.jurisdiction), selectinload(CaseRecord.court),
+        selectinload(CaseRecord.offences).selectinload(CaseOffence.offence),
+        selectinload(CaseRecord.outcomes).selectinload(CaseOutcome.sentences),
+        selectinload(CaseRecord.sources)))
+    if item is None:
+        raise HTTPException(status_code=404, detail="Case not found")
+    return {
+        "case": CaseOut.model_validate(item).model_dump(mode="json"),
+        "jurisdiction": item.jurisdiction.name if item.jurisdiction else None,
+        "court": item.court.name if item.court else None,
+        "offences": [{"id": x.id, "name": x.offence.name, "category": x.offence.category, "role": x.role} for x in item.offences],
+        "outcomes": [{"id": o.id, "outcome_type": o.outcome_type, "notes": o.notes,
+                      "sentences": [{"id": s.id, "sentence_type": s.sentence_type, "duration_months": s.duration_months,
+                                     "fine_amount": s.fine_amount, "currency": s.currency,
+                                     "is_suspended": s.is_suspended, "notes": s.notes} for s in o.sentences]}
+                     for o in item.outcomes],
+        "sources": [{"id": s.id, "source_type": s.source_type, "title": s.title, "url": s.url,
+                     "citation": s.citation, "accessed_on": s.accessed_on.isoformat() if s.accessed_on else None}
+                    for s in item.sources]
+    }
+
+@router.post("/{case_id}/research", status_code=201)
+def add_case_research(case_id: int, payload: ResearchDataCreate, db: Session = Depends(get_db)):
+    item = db.get(CaseRecord, case_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Case not found")
+    try:
+        for entry in payload.offences:
+            name = entry.name.strip()
+            if not name:
+                continue
+            offence = db.scalar(select(Offence).where(
+                Offence.jurisdiction_id == item.jurisdiction_id,
+                Offence.name.ilike(name)))
+            if offence is None:
+                offence = Offence(name=name, category=entry.category, jurisdiction_id=item.jurisdiction_id)
+                db.add(offence)
+                db.flush()
+            exists = db.scalar(select(CaseOffence).where(
+                CaseOffence.case_id == case_id, CaseOffence.offence_id == offence.id,
+                CaseOffence.role == entry.role))
+            if exists is None:
+                db.add(CaseOffence(case_id=case_id, offence_id=offence.id, role=entry.role))
+        for entry in payload.outcomes:
+            outcome = CaseOutcome(case_id=case_id, outcome_type=entry.outcome_type.strip().lower(), notes=entry.notes)
+            db.add(outcome)
+            db.flush()
+            for s in entry.sentences:
+                db.add(Sentence(outcome_id=outcome.id, **s.model_dump()))
+        for entry in payload.sources:
+            url = entry.url.strip()
+            if url and not url.startswith(("https://", "http://")):
+                raise HTTPException(status_code=422, detail="Source URLs must begin with http:// or https://")
+            db.add(CaseSource(case_id=case_id, **entry.model_dump()))
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    return {"message": "Research data saved", "case_id": case_id}
 
 @router.get("/{case_id}", response_model=CaseOut)
 def get_case(case_id: int, db: Session = Depends(get_db)):
