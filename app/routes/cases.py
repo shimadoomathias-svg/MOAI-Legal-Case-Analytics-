@@ -112,8 +112,7 @@ async def import_cases_csv(request: Request, db: Session = Depends(get_db)):
     if not raw or len(raw) > 5_000_000:
         raise HTTPException(status_code=400, detail="Upload a non-empty CSV file smaller than 5 MB")
     try:
-        text_data = raw.decode("utf-8-sig")
-        reader = csv.DictReader(io.StringIO(text_data))
+        reader = csv.DictReader(io.StringIO(raw.decode("utf-8-sig")))
         required = {"title", "case_reference", "jurisdiction"}
         if not reader.fieldnames or not required.issubset({x.strip() for x in reader.fieldnames if x}):
             raise HTTPException(status_code=400, detail="CSV must include title, case_reference and jurisdiction columns")
@@ -135,7 +134,8 @@ async def import_cases_csv(request: Request, db: Session = Depends(get_db)):
                 jurisdiction_name = row.get("jurisdiction", "")
                 if not title or not reference or not jurisdiction_name:
                     raise ValueError("title, case_reference and jurisdiction are required")
-                jurisdiction = db.scalar(select(Jurisdiction).where(func.lower(Jurisdiction.name) == jurisdiction_name.lower()))
+                jurisdiction = db.scalar(select(Jurisdiction).where(
+                    func.lower(Jurisdiction.name) == jurisdiction_name.lower()))
                 if jurisdiction is None:
                     raise ValueError(f"Unknown jurisdiction: {jurisdiction_name}")
                 court = None
@@ -178,14 +178,14 @@ async def import_cases_csv(request: Request, db: Session = Depends(get_db)):
                     db.add(CaseOffence(case_id=item.id, offence_id=offence.id,
                         role=row.get("offence_role", "charged") or "charged"))
                 factor_description = row.get("factor_description", "")
-            if factor_description:
-                factor_type = row.get("factor_type", "mitigating").lower() or "mitigating"
-                if factor_type not in {"aggravating", "mitigating", "neutral"}:
-                    raise ValueError("factor_type must be aggravating, mitigating or neutral")
-                db.add(CaseFactor(case_id=item.id, factor_type=factor_type,
-                    category=row.get("factor_category", "Other") or "Other",
-                    description=factor_description))
-            outcome_type = row.get("outcome_type", "").lower()
+                if factor_description:
+                    factor_type = row.get("factor_type", "mitigating").lower() or "mitigating"
+                    if factor_type not in {"aggravating", "mitigating", "neutral"}:
+                        raise ValueError("factor_type must be aggravating, mitigating or neutral")
+                    db.add(CaseFactor(case_id=item.id, factor_type=factor_type,
+                        category=row.get("factor_category", "Other") or "Other",
+                        description=factor_description))
+                outcome_type = row.get("outcome_type", "").lower()
                 if outcome_type:
                     outcome = CaseOutcome(case_id=item.id, outcome_type=outcome_type,
                         notes=row.get("outcome_notes", ""))
@@ -201,7 +201,7 @@ async def import_cases_csv(request: Request, db: Session = Depends(get_db)):
                             duration_months=duration, fine_amount=fine,
                             currency=row.get("currency", "").upper(), is_suspended=suspended))
                 db.flush()
-                imported += 1
+            imported += 1
         except Exception as exc:
             errors.append({"row": line_number, "error": str(exc)})
     if imported:
