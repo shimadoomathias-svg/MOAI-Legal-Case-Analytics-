@@ -682,8 +682,13 @@ async def automated_legal_research(payload: PredictionRequest, db: Session = Dep
                 detail="Could not reach the CourtListener legal research API."
             )
         if research["status"] in {"not_configured", "authentication_failed", "rate_limited"}:
+            public_status = {
+                "not_configured": "source_not_configured",
+                "authentication_failed": "source_authentication_failed",
+                "rate_limited": "source_rate_limited",
+            }[research["status"]]
             return {
-                "status": "source_not_configured",
+                "status": public_status,
                 "jurisdiction": jurisdiction.name,
                 "source_provider": source_provider,
                 "message": research["message"],
