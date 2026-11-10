@@ -593,7 +593,7 @@ async def assess_researched_case(payload, jurisdiction_name, research):
         "unless the supplied evidence supports a real statistical calculation. Never call this "
         "a trained predictive model. If sources are too few or weak, say the evidence is "
         "insufficient rather than guessing. Cite each authority using the supplied citation "
-        "and URL. Mention that OpenLegal is a research source and certified court copies and "
+        "and URL. Mention that the source is a legal research service and that certified court copies and "
         "official legislation must be checked. This is not legal advice."
     )
     try:
