@@ -85,6 +85,11 @@ def count_cases(jurisdiction_id: int | None = None, year: int | None = None,
 def create_case(payload: CaseCreate, db: Session = Depends(get_db)):
     if db.get(Jurisdiction, payload.jurisdiction_id) is None:
         raise HTTPException(status_code=400, detail="Unknown jurisdiction_id")
+    duplicate = db.scalar(select(CaseRecord).where(
+        CaseRecord.jurisdiction_id == payload.jurisdiction_id,
+        func.lower(CaseRecord.case_reference) == payload.case_reference.strip().lower()))
+    if duplicate is not None:
+        raise HTTPException(status_code=409, detail="A case with this reference already exists in the selected jurisdiction")
     if payload.court_id is not None:
         court = db.get(Court, payload.court_id)
         if court is None or court.jurisdiction_id != payload.jurisdiction_id:
@@ -104,6 +109,12 @@ def update_case(case_id: int, payload: CaseUpdate, db: Session = Depends(get_db)
         raise HTTPException(status_code=404, detail="Case not found")
     changes = payload.model_dump(exclude_unset=True)
     new_jurisdiction_id = changes.get("jurisdiction_id", item.jurisdiction_id)
+    new_reference = changes.get("case_reference", item.case_reference)
+    duplicate = db.scalar(select(CaseRecord).where(
+        CaseRecord.id != case_id, CaseRecord.jurisdiction_id == new_jurisdiction_id,
+        func.lower(CaseRecord.case_reference) == new_reference.strip().lower()))
+    if duplicate is not None:
+        raise HTTPException(status_code=409, detail="Another case already uses this reference in the selected jurisdiction")
     if "jurisdiction_id" in changes and db.get(Jurisdiction, new_jurisdiction_id) is None:
         raise HTTPException(status_code=400, detail="Unknown jurisdiction_id")
     new_court_id = changes.get("court_id", item.court_id)
@@ -169,6 +180,11 @@ async def import_cases_csv(request: Request, db: Session = Depends(get_db)):
                     func.lower(Jurisdiction.name) == jurisdiction_name.lower()))
                 if jurisdiction is None:
                     raise ValueError(f"Unknown jurisdiction: {jurisdiction_name}")
+                duplicate = db.scalar(select(CaseRecord.id).where(
+                    CaseRecord.jurisdiction_id == jurisdiction.id,
+                    func.lower(CaseRecord.case_reference) == reference.lower()))
+                if duplicate is not None:
+                    raise ValueError("A case with this reference already exists in the selected jurisdiction")
                 court = None
                 if row.get("court"):
                     court = db.scalar(select(Court).where(
