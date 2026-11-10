@@ -241,15 +241,20 @@ def _relevance_score(query_terms, document):
 
 async def search_openlegal_nigeria(offence, facts, court_name=None, db=None):
     """Search and retrieve public Nigerian judgments and legislation via OpenLegal's documented API."""
-    fact_words = [w for w in re.findall(r"[A-Za-z][A-Za-z-]{3,}", facts or "")
-                  if w.lower() not in STOP_WORDS]
-    distinct_fact_words = list(dict.fromkeys(fact_words))
-    query_candidates = [
-        offence.strip(),
-        " ".join([offence.strip()] + distinct_fact_words[:8]),
-    ]
+    offence_text = (offence or "").strip()
+    offence_lower = offence_text.lower()
+    # Search legal issue terminology rather than the opening words of a fact narrative.
+    if "robbery" in offence_lower:
+        query_candidates = [offence_text, "armed robbery firearm"]
+        law_queries = [
+            "Robbery and Firearms (Special Provisions) Act",
+            "armed robbery firearm",
+        ]
+    else:
+        query_candidates = [offence_text, offence_text]
+        law_queries = [offence_text]
     queries = list(dict.fromkeys(q for q in query_candidates if q))
-    query_terms = terms(offence + " " + (facts or ""))
+    query_terms = terms(offence_text)
     headers = {"Accept": "application/json", "User-Agent": "MOAI-Legal-Case-Analytics/1.0"}
     async with httpx.AsyncClient(timeout=25, follow_redirects=True) as client:
         async def fetch_search(query):
@@ -345,10 +350,7 @@ async def search_openlegal_nigeria(offence, facts, court_name=None, db=None):
 
         # Search statutory sections using both the offence and the principal
         # factual terms. Legislation search is allowed to fail independently.
-        law_queries = list(dict.fromkeys([
-            offence.strip(),
-            " ".join(distinct_fact_words[:6]),
-        ]))
+        law_queries = list(dict.fromkeys(q for q in law_queries if q))
         law_rows_by_id = {}
         for law_query in law_queries:
             if not law_query:
@@ -365,6 +367,13 @@ async def search_openlegal_nigeria(offence, facts, court_name=None, db=None):
                     if isinstance(law_rows, list):
                         for law in law_rows:
                             if isinstance(law, dict):
+                                law_name = " ".join(str(law.get(k, "")) for k in
+                                    ("title", "name", "law", "law_name")).lower()
+                                if "robbery" in offence_lower and not (
+                                    "robbery and firearms" in law_name
+                                    or "robbery and firearm" in law_name
+                                ):
+                                    continue
                                 identity = str(law.get("id") or (
                                     law.get("title", "") + law.get("section", "")
                                 ))
@@ -590,10 +599,18 @@ async def search_courtlistener_us(offence, facts, db=None):
 
 
 async def assess_researched_case(payload, jurisdiction_name, research):
-    if not research.get("documents"):
+    judgment_count = sum(
+        1 for document in research.get("documents", [])
+        if document.get("material_type") == "judgment"
+    )
+    if judgment_count == 0:
         return {
             "status": "insufficient_evidence",
-            "message": "No legal judgments or legislation were retrieved. The system will not generate an outcome assessment without supporting legal sources."
+            "message": (
+                "No comparable court judgments were retrieved. Statutory search results "
+                "alone are not enough to support a case-outcome assessment. The system "
+                "will not generate a prediction from legislation snippets alone."
+            )
         }
     api_key = os.getenv("OPENROUTER_API_KEY")
     if not api_key:
