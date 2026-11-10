@@ -11,6 +11,7 @@ A multi-jurisdiction legal research and case-outcome analytics platform. A resea
 - Dashboard and descriptive analytics for the records actually stored in the application's database.
 - Case comparison and CSV workflows.
 - **Automated Nigerian legal research:** queries the free, read-only OpenLegal Nigeria REST API for judgments and legislation.
+- **Automated United States case-law research:** queries CourtListener's authenticated v4 opinions search and retrieves full opinion text when `COURTLISTENER_API_TOKEN` is configured.
 - Multi-query retrieval using the offence and material factual terms; deduplicates results, ranks source matches, retrieves judgment details and caches public source text.
 - **AI-supported legal assessment:** sends the submitted hypothetical facts and a bounded selection of retrieved public legal materials to the configured OpenRouter free model.
 - Results include source links, citations where supplied, retrieval relevance indicators, the number of retrieved judgments and legislation sections, and limitations.
@@ -38,6 +39,10 @@ OpenLegal Nigeria documents a free, read-only REST API requiring no API key:
 
 The application links to the source judgment pages. OpenLegal is a legal information service; verify material against certified court copies and official legislation before relying on it.
 
+### United States — connected when token is configured
+
+CourtListener's v4 API requires token authentication. The connector searches published opinion clusters, retrieves up to three lead opinions per request, and caches public opinion text for 30 days. CourtListener documents default authenticated limits of 5 requests per minute, 50 per hour and 125 per day; the connector deliberately caps each search to one search request and up to three opinion-detail requests. No United States legislation connector is included yet.
+
 ### Other jurisdictions — not yet connected
 
 The jurisdiction reference data is present, but an automated research connector is not enabled merely because a jurisdiction appears in the selector. Each jurisdiction needs an authorised source/API and its permitted access method. The application does not scrape sites that prohibit automated access or computational reuse. Where a source requires an API key, account approval or licence, that requirement must be met before enabling it.
@@ -49,11 +54,12 @@ Set these in the deployment environment, not in source code:
 - `DATABASE_URL`: PostgreSQL connection string. If omitted locally, SQLite is used.
 - `OPENROUTER_API_KEY`: OpenRouter API key for AI analysis.
 - `OPENROUTER_MODEL`: defaults to `openrouter/free`; alternatively use a verified model ID ending in `:free`.
+- `COURTLISTENER_API_TOKEN`: optional CourtListener token; required only to enable United States case-law research.
 - `APP_PUBLIC_URL`: optional public application URL used in OpenRouter request metadata.
 
 The application rejects a configured OpenRouter model that is not `openrouter/free` or a model ID ending in `:free`. Never commit API keys or paste them into public issue trackers.
 
-**Privacy:** submitted case facts are sent as search terms to the connected legal-source API and, when AI analysis is enabled, are sent to OpenRouter together with selected public source extracts. Submit anonymised facts only. Do not enter privileged, confidential, identifying or otherwise sensitive client information.
+**Privacy:** submitted case facts are sent as search terms to the connected legal-source API (OpenLegal Nigeria or CourtListener, depending on jurisdiction) and, when AI analysis is enabled, are sent to OpenRouter together with selected public source extracts. Submit anonymised facts only. Do not enter privileged, confidential, identifying or otherwise sensitive client information.
 
 ## Run locally
 
