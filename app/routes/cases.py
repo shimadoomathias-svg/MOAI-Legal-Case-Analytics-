@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 import csv
 import io
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.orm import Session, selectinload
 from ..database import get_db
 from ..models import CaseRecord, Jurisdiction, Court, Offence, CaseOffence, CaseOutcome, Sentence, CaseSource
@@ -12,7 +12,10 @@ router = APIRouter(prefix="/api/cases", tags=["Cases"])
 
 @router.get("", response_model=list[CaseOut])
 def list_cases(jurisdiction_id: int | None = None, year: int | None = None,
-               verdict: str | None = Query(default=None, description="Reserved for outcome filtering"),
+               verdict: str | None = None, offence: str | None = None,
+               court_id: int | None = None, sentence_type: str | None = None,
+               min_sentence_months: float | None = Query(default=None, ge=0),
+               max_sentence_months: float | None = Query(default=None, ge=0),
                search: str | None = None, limit: int = Query(default=100, ge=1, le=500),
                offset: int = Query(default=0, ge=0), db: Session = Depends(get_db)):
     stmt = select(CaseRecord).order_by(CaseRecord.decision_date.desc(), CaseRecord.id.desc())
@@ -20,6 +23,23 @@ def list_cases(jurisdiction_id: int | None = None, year: int | None = None,
         stmt = stmt.where(CaseRecord.jurisdiction_id == jurisdiction_id)
     if year is not None:
         stmt = stmt.where(CaseRecord.year == year)
+    if court_id is not None:
+        stmt = stmt.where(CaseRecord.court_id == court_id)
+    if verdict:
+        stmt = stmt.where(CaseRecord.outcomes.any(func.lower(CaseOutcome.outcome_type) == verdict.strip().lower()))
+    if offence:
+        stmt = stmt.where(CaseRecord.offences.any(CaseOffence.offence.has(func.lower(Offence.name) == offence.strip().lower())))
+    if sentence_type:
+        stmt = stmt.where(CaseRecord.outcomes.any(CaseOutcome.sentences.any(
+            func.lower(Sentence.sentence_type) == sentence_type.strip().lower())))
+    if min_sentence_months is not None:
+        stmt = stmt.where(CaseRecord.outcomes.any(CaseOutcome.sentences.any(
+            Sentence.duration_months >= min_sentence_months)))
+    if max_sentence_months is not None:
+        stmt = stmt.where(CaseRecord.outcomes.any(CaseOutcome.sentences.any(
+            Sentence.duration_months <= max_sentence_months)))
+    if min_sentence_months is not None and max_sentence_months is not None and min_sentence_months > max_sentence_months:
+        raise HTTPException(status_code=400, detail="Minimum sentence duration cannot exceed maximum duration")
     if search:
         term = f"%{search.strip()}%"
         stmt = stmt.where((CaseRecord.title.ilike(term)) | (CaseRecord.case_reference.ilike(term)))
