@@ -362,13 +362,16 @@ async def search_openlegal_nigeria(offence, facts, court_name=None, db=None):
                     "text": _flatten_text(law)[:6000], "cached": False,
                 }
                 if db is not None and law.get("id"):
-                    record = ExternalLegalSource(
+                    record = cached or ExternalLegalSource(
                         provider="OpenLegal Nigeria", source_id=law_id,
-                        material_type="legislation", title=law_doc["title"],
-                        citation=law_doc["citation"], court="", url=law_doc["url"],
-                        content=law_doc["text"],
-                        retrieved_at=datetime.now(timezone.utc).replace(tzinfo=None),
+                        material_type="legislation"
                     )
+                    record.title = law_doc["title"]
+                    record.citation = law_doc["citation"]
+                    record.court = ""
+                    record.url = law_doc["url"]
+                    record.content = law_doc["text"]
+                    record.retrieved_at = datetime.now(timezone.utc).replace(tzinfo=None)
                     db.add(record)
             law_doc["relevance_score"] = _relevance_score(query_terms, law_doc)
             law_docs.append(law_doc)
@@ -401,13 +404,33 @@ async def assess_researched_case(payload, jurisdiction_name, research):
     if not (model == "openrouter/free" or model.endswith(":free")):
         return {"status": "invalid_model_configuration",
                 "message": "Only OpenRouter free models are enabled."}
+    # Bound the prompt size while preserving the highest-ranked source material.
+    ranked_judgments = sorted(
+        [d for d in research["documents"] if d.get("material_type") == "judgment"],
+        key=lambda d: d.get("relevance_score", 0), reverse=True
+    )[:5]
+    ranked_laws = sorted(
+        [d for d in research["documents"] if d.get("material_type") == "legislation"],
+        key=lambda d: d.get("relevance_score", 0), reverse=True
+    )[:3]
+    selected_material = []
+    for source in ranked_judgments + ranked_laws:
+        selected_material.append({
+            **{k: source.get(k) for k in (
+                "title", "citation", "court", "url", "source",
+                "material_type", "relevance_score"
+            )},
+            "text": (source.get("text") or "")[
+                :7000 if source.get("material_type") == "judgment" else 3500
+            ],
+        })
     evidence = {
         "jurisdiction": jurisdiction_name,
         "offence_or_legal_issue": payload.offence,
         "submitted_case_facts": payload.facts,
         "aggravating_factors": payload.aggravating_factors,
         "mitigating_factors": payload.mitigating_factors,
-        "retrieved_judgments": research["documents"],
+        "retrieved_legal_material": selected_material,
     }
     system = (
         "You are an evidence-grounded legal research and case-outcome assessment assistant. "
