@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 from ..database import get_db
-from ..models import CaseRecord, CaseOffence, Offence, CaseOutcome, Sentence
+from ..models import CaseRecord, CaseOffence, Offence, CaseOutcome, Sentence, Jurisdiction, Court
 from ..schemas import PredictionRequest
 
 router = APIRouter(prefix="/api/predictions", tags=["Predictions"])
@@ -21,6 +21,12 @@ def prediction_status():
 
 @router.post("/estimate")
 def estimate_outcome(payload: PredictionRequest, db: Session = Depends(get_db)):
+    if db.get(Jurisdiction, payload.jurisdiction_id) is None:
+        raise HTTPException(status_code=400, detail="Unknown jurisdiction_id")
+    if payload.court_id is not None:
+        court = db.get(Court, payload.court_id)
+        if court is None or court.jurisdiction_id != payload.jurisdiction_id:
+            raise HTTPException(status_code=400, detail="Court must belong to the selected jurisdiction")
     offence_name = payload.offence.strip()
     stmt = (
         select(CaseRecord)
@@ -29,6 +35,7 @@ def estimate_outcome(payload: PredictionRequest, db: Session = Depends(get_db)):
         .where(
             CaseRecord.jurisdiction_id == payload.jurisdiction_id,
             CaseRecord.data_status == "researcher-entered",
+            CaseRecord.sources.any(),
             func.lower(Offence.name) == offence_name.lower(),
             CaseOffence.role.in_(["charged", "convicted"])
         )
