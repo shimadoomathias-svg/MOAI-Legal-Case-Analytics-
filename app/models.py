@@ -7,7 +7,7 @@ class Jurisdiction(Base):
     __tablename__ = "jurisdictions"
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(120), unique=True, index=True)
-    country_code: Mapped[str] = mapped_column(String(3), default="")
+    country_code: Mapped[str] = mapped_column(String(12), default="")
     legal_system: Mapped[str] = mapped_column(String(80), default="Not specified")
     region: Mapped[str] = mapped_column(String(80), default="")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
