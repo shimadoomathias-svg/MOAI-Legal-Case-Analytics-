@@ -30,21 +30,17 @@ def list_cases(jurisdiction_id: int | None = None, year: int | None = None,
         stmt = stmt.where(CaseRecord.outcomes.any(func.lower(CaseOutcome.outcome_type) == verdict.strip().lower()))
     if offence:
         stmt = stmt.where(CaseRecord.offences.any(CaseOffence.offence.has(func.lower(Offence.name) == offence.strip().lower())))
+    sentence_conditions = []
     if sentence_type:
-        stmt = stmt.where(CaseRecord.outcomes.any(CaseOutcome.sentences.any(
-            func.lower(Sentence.sentence_type) == sentence_type.strip().lower())))
-    if min_sentence_months is not None and max_sentence_months is not None:
-        stmt = stmt.where(CaseRecord.outcomes.any(CaseOutcome.sentences.any(
-            (Sentence.duration_months >= min_sentence_months) &
-            (Sentence.duration_months <= max_sentence_months))))
-    elif min_sentence_months is not None:
-        stmt = stmt.where(CaseRecord.outcomes.any(CaseOutcome.sentences.any(
-            Sentence.duration_months >= min_sentence_months)))
-    elif max_sentence_months is not None:
-        stmt = stmt.where(CaseRecord.outcomes.any(CaseOutcome.sentences.any(
-            Sentence.duration_months <= max_sentence_months)))
+        sentence_conditions.append(func.lower(Sentence.sentence_type) == sentence_type.strip().lower())
+    if min_sentence_months is not None:
+        sentence_conditions.append(Sentence.duration_months >= min_sentence_months)
+    if max_sentence_months is not None:
+        sentence_conditions.append(Sentence.duration_months <= max_sentence_months)
     if min_sentence_months is not None and max_sentence_months is not None and min_sentence_months > max_sentence_months:
         raise HTTPException(status_code=400, detail="Minimum sentence duration cannot exceed maximum duration")
+    if sentence_conditions:
+        stmt = stmt.where(CaseRecord.outcomes.any(CaseOutcome.sentences.any(and_(*sentence_conditions))))
     if search:
         term = f"%{search.strip()}%"
         stmt = stmt.where((CaseRecord.title.ilike(term)) | (CaseRecord.case_reference.ilike(term)))
