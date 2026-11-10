@@ -40,50 +40,6 @@ app.include_router(ai.router)
 app.include_router(metadata.router)
 
 
-@app.get("/api/setup/status")
-def setup_status():
-    import os
-    openrouter_key = bool(os.getenv("OPENROUTER_API_KEY"))
-    courtlistener_key = bool(os.getenv("COURTLISTENER_API_TOKEN"))
-    model = os.getenv("OPENROUTER_MODEL", "openrouter/free")
-    free_model = model == "openrouter/free" or model.endswith(":free")
-    return {
-        "application": "MOAI Legal Case Analytics",
-        "ai_provider": {
-            "name": "OpenRouter",
-            "configured": openrouter_key,
-            "model": model,
-            "free_model_allowed": free_model,
-            "ready": openrouter_key and free_model,
-            "required_variable": "OPENROUTER_API_KEY"
-        },
-        "legal_sources": [
-            {
-                "name": "OpenLegal Nigeria",
-                "jurisdiction": "Nigeria",
-                "configured": True,
-                "credential_required": False,
-                "ready": True
-            },
-            {
-                "name": "CourtListener",
-                "jurisdiction": "United States",
-                "configured": courtlistener_key,
-                "credential_required": True,
-                "ready": courtlistener_key,
-                "required_variable": "COURTLISTENER_API_TOKEN"
-            }
-        ],
-        "additional_variables": [
-            {"name": "DATABASE_URL", "required": False, "purpose": "Persistent PostgreSQL database"},
-            {"name": "APP_PUBLIC_URL", "required": False, "purpose": "OpenRouter application metadata"}
-        ],
-        "other_jurisdictions": [
-            "England and Wales", "Canada", "Australia", "Ghana", "South Africa"
-        ],
-        "secrets_location": "Render service Environment settings"
-    }
-
 @app.get("/health")
 def health():
     return {"status": "ok", "application": "MOAI Legal Case Analytics"}
