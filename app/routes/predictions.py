@@ -638,28 +638,71 @@ async def automated_legal_research(payload: PredictionRequest, db: Session = Dep
         court = db.get(Court, payload.court_id)
         if court is None or court.jurisdiction_id != payload.jurisdiction_id:
             raise HTTPException(status_code=400, detail="Court must belong to the selected jurisdiction")
-    if jurisdiction.country_code.upper() != "NGA":
+    country_code = jurisdiction.country_code.upper()
+    court_name = None
+    if payload.court_id is not None:
+        court_name = db.get(Court, payload.court_id).name
+
+    if country_code == "NGA":
+        source_provider = "OpenLegal Nigeria"
+        try:
+            research = await search_openlegal_nigeria(
+                payload.offence, payload.facts, court_name, db
+            )
+        except httpx.HTTPStatusError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"OpenLegal Nigeria returned HTTP {exc.response.status_code}."
+            )
+        except (httpx.HTTPError, ValueError):
+            raise HTTPException(
+                status_code=502,
+                detail="Could not reach the OpenLegal Nigeria legal research API."
+            )
+    elif country_code == "USA":
+        source_provider = "CourtListener"
+        research = await search_courtlistener_us(payload.offence, payload.facts, db)
+        if research["status"] in {"not_configured", "authentication_failed"}:
+            return {
+                "status": "source_not_configured",
+                "jurisdiction": jurisdiction.name,
+                "source_provider": source_provider,
+                "message": research["message"],
+                "research_results": [],
+                "search_queries": research.get("queries", []),
+                "retrieved_judgment_count": 0,
+                "retrieved_legislation_count": 0,
+                "ai_prediction": {"status": "not_run", "message": research["message"]},
+                "limitations": [
+                    "A valid CourtListener API token is required for United States source retrieval.",
+                    "Only published case-law opinions are searched by the current connector."
+                ]
+            }
+    else:
         return {
             "status": "source_not_connected",
             "jurisdiction": jurisdiction.name,
             "message": (
-                "Automated source retrieval is currently connected for Nigeria through OpenLegal Nigeria. "
-                "This jurisdiction needs an authorised legal-data API or licence before automated research can run. "
-                "No unsupported scraping or fabricated authorities will be used."
+                "Automated source retrieval is not yet enabled for this jurisdiction. "
+                "A permitted legal-data API or licence must be connected first. "
+                "The application will not scrape sources that prohibit automated access."
             ),
             "research_sources": [], "research_results": [],
-            "ai_prediction": {"status": "not_run", "message": "No authorised source connector is available for this jurisdiction."}
+            "ai_prediction": {
+                "status": "not_run",
+                "message": "No authorised source connector is available for this jurisdiction."
+            }
         }
-    court_name = None
-    if payload.court_id is not None:
-        court = db.get(Court, payload.court_id)
-        court_name = court.name
-    try:
-        research = await search_openlegal_nigeria(payload.offence, payload.facts, court_name, db)
-    except httpx.HTTPStatusError as exc:
-        raise HTTPException(status_code=502, detail=f"OpenLegal Nigeria returned HTTP {exc.response.status_code}.")
-    except (httpx.HTTPError, ValueError):
-        raise HTTPException(status_code=502, detail="Could not reach the OpenLegal Nigeria judgments API.")
+
+    if research.get("status") == "authentication_failed":
+        return {
+            "status": "source_authentication_failed",
+            "jurisdiction": jurisdiction.name,
+            "source_provider": source_provider,
+            "message": research.get("message", "The legal source rejected authentication."),
+            "research_results": [],
+            "ai_prediction": {"status": "not_run", "message": "Source authentication failed."}
+        }
     ai_result = await assess_researched_case(payload, jurisdiction.name, research)
     sources = [{"title": d["title"], "citation": d["citation"], "court": d["court"],
                 "url": d["url"], "source": d["source"], "material_type": d.get("material_type", "judgment"),
@@ -667,7 +710,7 @@ async def automated_legal_research(payload: PredictionRequest, db: Session = Dep
     return {
         "status": "research_completed" if research["documents"] else "no_matches",
         "jurisdiction": jurisdiction.name,
-        "source_provider": "OpenLegal Nigeria",
+        "source_provider": source_provider,
         "search_query": research["query"],
         "search_queries": research.get("queries", [research["query"]]),
         "cached_source_count": research.get("cache_hits", 0),
@@ -680,7 +723,8 @@ async def automated_legal_research(payload: PredictionRequest, db: Session = Dep
             "This is retrieval-augmented legal analysis, not a trained machine-learning model.",
             "Search results depend on the judgments available in the connected source; absence of a result does not mean no authority exists.",
             "A legal research assessment is not a statistical probability or guaranteed court outcome.",
-            "Verify judgments against certified court copies and legislation against official gazettes."
+            "Verify judgments against certified court copies and legislation against official gazettes.",
+            "The CourtListener connector searches United States opinions; it does not retrieve United States legislation."
         ]
     }
 
