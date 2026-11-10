@@ -71,3 +71,9 @@ class ResearchDataCreate(BaseModel):
     offences: list[OffenceCreate] = Field(default_factory=list)
     outcomes: list[OutcomeCreate] = Field(default_factory=list)
     sources: list[SourceCreate] = Field(default_factory=list)
+
+
+class PredictionRequest(BaseModel):
+    jurisdiction_id: int
+    offence: str = Field(min_length=2, max_length=180)
+    court_id: int | None = None
