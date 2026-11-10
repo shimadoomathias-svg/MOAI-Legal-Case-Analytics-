@@ -139,7 +139,7 @@ body+='<p><strong>Comparable sourced cases:</strong> '+d.comparable_case_count+'
 async function loadSetupStatus(){
  const box=$('setupSources');box.textContent='Checking configuration…';
  try{
-  const d=await get('/api/setup/status');
+  const d=await get('/api/predictions/setup-status');
   $('setupAiState').textContent=d.ai_provider.ready?'Ready':'Needs API key';
   $('setupAiModel').textContent='Model: '+d.ai_provider.model+(d.ai_provider.free_model_allowed?' · free routing':' · NOT ALLOWED');
   const us=d.legal_sources.find(x=>x.name==='CourtListener');
