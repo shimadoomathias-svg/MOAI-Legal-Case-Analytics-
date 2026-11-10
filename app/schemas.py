@@ -67,7 +67,13 @@ class SourceCreate(BaseModel):
     citation: str = Field(default="", max_length=240)
     accessed_on: date | None = None
 
+class FactorCreate(BaseModel):
+    factor_type: str = Field(default="mitigating", pattern="^(aggravating|mitigating|neutral)$")
+    category: str = Field(default="Other", max_length=100)
+    description: str = Field(min_length=3, max_length=4000)
+
 class ResearchDataCreate(BaseModel):
+    factors: list[FactorCreate] = Field(default_factory=list)
     offences: list[OffenceCreate] = Field(default_factory=list)
     outcomes: list[OutcomeCreate] = Field(default_factory=list)
     sources: list[SourceCreate] = Field(default_factory=list)
