@@ -110,6 +110,8 @@ def update_case(case_id: int, payload: CaseUpdate, db: Session = Depends(get_db)
     changes = payload.model_dump(exclude_unset=True)
     new_jurisdiction_id = changes.get("jurisdiction_id", item.jurisdiction_id)
     new_reference = changes.get("case_reference", item.case_reference)
+    if new_reference is None:
+        raise HTTPException(status_code=400, detail="Case reference cannot be empty")
     duplicate = db.scalar(select(CaseRecord).where(
         CaseRecord.id != case_id, CaseRecord.jurisdiction_id == new_jurisdiction_id,
         func.lower(CaseRecord.case_reference) == new_reference.strip().lower()))
