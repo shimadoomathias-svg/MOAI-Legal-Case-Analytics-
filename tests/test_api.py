@@ -96,3 +96,75 @@ def test_prediction_rejects_unknown_jurisdiction(client):
         "facts": "A hypothetical set of facts",
     })
     assert response.status_code == 400
+
+
+
+def test_automated_research_uses_external_judgments_without_local_case_corpus(client, monkeypatch):
+    db_generator = client.app.dependency_overrides[get_db]()
+    db = next(db_generator)
+    jurisdiction = Jurisdiction(
+        name="Nigeria", country_code="NGA", legal_system="Common law"
+    )
+    db.add(jurisdiction)
+    db.commit()
+    db.refresh(jurisdiction)
+    jurisdiction_id = jurisdiction.id
+    db_generator.close()
+
+    async def fake_search(offence, facts, court_name=None):
+        return {
+            "query": offence,
+            "total": 1,
+            "documents": [{
+                "title": "A v B",
+                "citation": "2024 NGSC 1",
+                "court": "Supreme Court of Nigeria",
+                "url": "https://openlegal.casewinai.com/judgments/example",
+                "source": "OpenLegal Nigeria",
+                "source_id": "example",
+                "text": "Holding: Example holding"
+            }]
+        }
+
+    async def fake_assessment(payload, jurisdiction_name, research):
+        assert jurisdiction_name == "Nigeria"
+        assert len(research["documents"]) == 1
+        return {"status": "generated", "assessment": "Conditional assessment"}
+
+    monkeypatch.setattr(predictions, "search_openlegal_nigeria", fake_search)
+    monkeypatch.setattr(predictions, "assess_researched_case", fake_assessment)
+
+    response = client.post("/api/predictions/research", json={
+        "jurisdiction_id": jurisdiction_id,
+        "offence": "Armed robbery",
+        "facts": "The accused allegedly used a firearm during a robbery."
+    })
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "research_completed"
+    assert data["retrieved_judgment_count"] == 1
+    assert data["research_results"][0]["citation"] == "2024 NGSC 1"
+    assert data["ai_prediction"]["status"] == "generated"
+
+
+def test_automated_research_does_not_claim_unconnected_jurisdiction_support(client):
+    db_generator = client.app.dependency_overrides[get_db]()
+    db = next(db_generator)
+    jurisdiction = Jurisdiction(
+        name="England and Wales", country_code="GB-ENG", legal_system="Common law"
+    )
+    db.add(jurisdiction)
+    db.commit()
+    db.refresh(jurisdiction)
+    jurisdiction_id = jurisdiction.id
+    db_generator.close()
+
+    response = client.post("/api/predictions/research", json={
+        "jurisdiction_id": jurisdiction_id,
+        "offence": "Theft",
+        "facts": "A hypothetical theft case."
+    })
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "source_not_connected"
+    assert data["research_results"] == []
