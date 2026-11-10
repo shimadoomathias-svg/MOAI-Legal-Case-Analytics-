@@ -162,7 +162,8 @@ def _flatten_text(value, limit=14000):
     chunks = []
     preferred = {"title", "cite_as", "suit_number", "court", "holding", "issues",
                  "excerpt", "summary", "full_text", "text", "judgment", "content",
-                 "statutes", "cases_cited", "date", "decision_date"}
+                 "statutes", "cases_cited", "date", "decision_date", "body", "section",
+                 "section_text", "section_title", "provision", "statute", "law", "law_name", "name"}
     def walk(node, key=""):
         if len("\n".join(chunks)) >= limit:
             return
