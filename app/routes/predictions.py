@@ -1,5 +1,7 @@
+import asyncio
 import os
 import re
+from datetime import datetime, timezone
 from statistics import median
 
 import httpx
@@ -9,7 +11,8 @@ from sqlalchemy.orm import Session, selectinload
 
 from ..database import get_db
 from ..models import (
-    CaseRecord, CaseOffence, Offence, CaseOutcome, Jurisdiction, Court, CaseFactor
+    CaseRecord, CaseOffence, Offence, CaseOutcome, Jurisdiction, Court, CaseFactor,
+    ExternalLegalSource
 )
 from ..schemas import PredictionRequest
 
@@ -178,87 +181,207 @@ def _flatten_text(value, limit=14000):
     return "\n".join(dict.fromkeys(chunks))[:limit]
 
 
-async def search_openlegal_nigeria(offence, facts, court_name=None):
-    """Search the publisher's documented, free, read-only Nigeria judgments API."""
-    words = [w for w in re.findall(r"[A-Za-z][A-Za-z-]{3,}", facts or "")
-             if w.lower() not in STOP_WORDS]
-    query = " ".join([offence] + list(dict.fromkeys(words[:8])))
-    params = {"q": query, "limit": 8, "page": 1}
-    if court_name:
-        params["court"] = court_name
+def _relevance_score(query_terms, document):
+    searchable = " ".join([
+        str(document.get("title", "")),
+        str(document.get("citation", "")),
+        str(document.get("court", "")),
+        str(document.get("text", "")),
+    ])
+    found = terms(searchable)
+    if not query_terms or not found:
+        return 0.0
+    return round(100 * len(query_terms & found) / len(query_terms | found), 1)
+
+
+async def search_openlegal_nigeria(offence, facts, court_name=None, db=None):
+    """Search and retrieve public Nigerian judgments and legislation via OpenLegal's documented API."""
+    fact_words = [w for w in re.findall(r"[A-Za-z][A-Za-z-]{3,}", facts or "")
+                  if w.lower() not in STOP_WORDS]
+    distinct_fact_words = list(dict.fromkeys(fact_words))
+    query_candidates = [
+        offence.strip(),
+        " ".join([offence.strip()] + distinct_fact_words[:8]),
+    ]
+    queries = list(dict.fromkeys(q for q in query_candidates if q))
+    query_terms = terms(offence + " " + (facts or ""))
+    headers = {"Accept": "application/json", "User-Agent": "MOAI-Legal-Case-Analytics/1.0"}
     async with httpx.AsyncClient(timeout=25, follow_redirects=True) as client:
-        response = await client.get(f"{OPENLEGAL_API}/judgments", params=params,
-                                    headers={"Accept": "application/json"})
-        response.raise_for_status()
-        payload = response.json()
-        rows = payload.get("results", []) if isinstance(payload, dict) else payload
-        if not isinstance(rows, list):
-            rows = []
-        documents = []
-        seen = set()
-        for row in rows[:8]:
-            if not isinstance(row, dict):
-                continue
-            item_id = row.get("id")
-            if not item_id or str(item_id) in seen:
-                continue
-            seen.add(str(item_id))
+        async def fetch_search(query):
+            params = {"q": query, "limit": 6, "page": 1}
+            if court_name:
+                params["court"] = court_name
+            response = await client.get(
+                f"{OPENLEGAL_API}/judgments", params=params, headers=headers
+            )
+            response.raise_for_status()
+            data = response.json()
+            rows = data.get("results", []) if isinstance(data, dict) else data
+            return rows if isinstance(rows, list) else [], (
+                data.get("total", len(rows)) if isinstance(data, dict) else len(rows)
+            )
+
+        search_responses = await asyncio.gather(*(fetch_search(q) for q in queries))
+        rows_by_id = {}
+        total_matches = 0
+        for rows, total in search_responses:
+            total_matches += int(total or 0)
+            for row in rows:
+                if isinstance(row, dict) and row.get("id"):
+                    rows_by_id.setdefault(str(row["id"]), row)
+
+        # Fetch the strongest candidate summaries first; source ranking is only
+        # a retrieval aid and is never represented as legal similarity.
+        ranked_rows = sorted(
+            rows_by_id.values(),
+            key=lambda row: _relevance_score(query_terms, {
+                "title": row.get("title", ""),
+                "citation": row.get("cite_as", ""),
+                "court": row.get("court", ""),
+                "text": " ".join(str(row.get(k, "")) for k in ("holding", "excerpt")),
+            }),
+            reverse=True,
+        )[:10]
+
+        semaphore = asyncio.Semaphore(4)
+        async def retrieve_judgment(row):
+            source_id = str(row["id"])
+            cached = None
+            if db is not None:
+                cached = db.query(ExternalLegalSource).filter_by(
+                    provider="OpenLegal Nigeria", source_id=source_id,
+                    material_type="judgment"
+                ).first()
+            if cached is not None and cached.content:
+                return {
+                    "title": cached.title, "citation": cached.citation,
+                    "court": cached.court, "url": cached.url,
+                    "source": cached.provider, "source_id": source_id,
+                    "material_type": "judgment", "text": cached.content,
+                    "cached": True,
+                }
+
             detail = {}
-            try:
-                detail_response = await client.get(
-                    f"{OPENLEGAL_API}/judgments/{item_id}",
-                    headers={"Accept": "application/json"}
-                )
-                if detail_response.status_code < 400:
-                    detail = detail_response.json()
-            except (httpx.HTTPError, ValueError):
-                detail = {}
+            async with semaphore:
+                try:
+                    detail_response = await client.get(
+                        f"{OPENLEGAL_API}/judgments/{source_id}", headers=headers
+                    )
+                    if detail_response.status_code < 400:
+                        detail = detail_response.json()
+                except (httpx.HTTPError, ValueError):
+                    detail = {}
             merged = {**row, **(detail if isinstance(detail, dict) else {})}
-            documents.append({
-                "title": row.get("title") or merged.get("title") or "Untitled judgment",
-                "citation": row.get("cite_as") or row.get("suit_number") or merged.get("cite_as") or "",
-                "court": row.get("court") or merged.get("court") or "",
-                "url": row.get("url") or merged.get("url") or
-                       f"https://openlegal.casewinai.com/judgments/{item_id}",
-                "source": "OpenLegal Nigeria",
-                "source_id": str(item_id),
-                "text": _flatten_text(merged)[:14000],
-            })
-        # The same public API exposes searchable legislation; include it as a separate
-        # evidence type so the model cannot confuse a statutory section with a judgment.
-        law_documents = []
-        try:
-            law_response = await client.get(f"{OPENLEGAL_API}/laws",
-                params={"q": offence, "limit": 5},
-                headers={"Accept": "application/json"})
-            if law_response.status_code < 400:
-                law_payload = law_response.json()
-                law_rows = law_payload.get("results", []) if isinstance(law_payload, dict) else law_payload
-                if isinstance(law_rows, list):
-                    for law in law_rows[:5]:
-                        if not isinstance(law, dict):
-                            continue
-                        law_documents.append({
-                            "material_type": "legislation",
-                            "title": law.get("title") or law.get("name") or law.get("law") or "Legislation section",
-                            "citation": law.get("citation") or law.get("section") or law.get("cite_as") or "",
-                            "court": "",
-                            "url": law.get("url") or "",
-                            "source": "OpenLegal Nigeria",
-                            "source_id": str(law.get("id") or ""),
-                            "text": _flatten_text(law)[:6000],
-                        })
-        except (httpx.HTTPError, ValueError):
-            # A temporary legislation-search failure must not discard judgment results.
-            pass
-        for document in documents:
-            document["material_type"] = "judgment"
-        combined = documents + law_documents
-        return {"query": query,
-                "total": payload.get("total", len(rows)) if isinstance(payload, dict) else len(rows),
-                "documents": combined,
-                "judgment_count": len(documents),
-                "legislation_count": len(law_documents)}
+            title = merged.get("title") or "Untitled judgment"
+            citation = (merged.get("cite_as") or merged.get("suit_number") or "")
+            court = merged.get("court") or ""
+            url = merged.get("url") or (
+                f"https://openlegal.casewinai.com/judgments/{source_id}"
+            )
+            text = _flatten_text(merged)[:14000]
+            if db is not None:
+                record = cached or ExternalLegalSource(
+                    provider="OpenLegal Nigeria", source_id=source_id,
+                    material_type="judgment"
+                )
+                record.title, record.citation, record.court = title, citation, court
+                record.url, record.content = url, text
+                record.retrieved_at = datetime.now(timezone.utc).replace(tzinfo=None)
+                db.add(record)
+            doc = {
+                "title": title, "citation": citation, "court": court,
+                "url": url, "source": "OpenLegal Nigeria", "source_id": source_id,
+                "material_type": "judgment", "text": text, "cached": False,
+            }
+            doc["relevance_score"] = _relevance_score(query_terms, doc)
+            return doc
+
+        judgment_docs = await asyncio.gather(*(retrieve_judgment(row) for row in ranked_rows))
+
+        # Search statutory sections using both the offence and the principal
+        # factual terms. Legislation search is allowed to fail independently.
+        law_queries = list(dict.fromkeys([
+            offence.strip(),
+            " ".join(distinct_fact_words[:6]),
+        ]))
+        law_rows_by_id = {}
+        for law_query in law_queries:
+            if not law_query:
+                continue
+            try:
+                law_response = await client.get(
+                    f"{OPENLEGAL_API}/laws",
+                    params={"q": law_query, "limit": 5},
+                    headers=headers,
+                )
+                if law_response.status_code < 400:
+                    law_payload = law_response.json()
+                    law_rows = law_payload.get("results", []) if isinstance(law_payload, dict) else law_payload
+                    if isinstance(law_rows, list):
+                        for law in law_rows:
+                            if isinstance(law, dict):
+                                identity = str(law.get("id") or (
+                                    law.get("title", "") + law.get("section", "")
+                                ))
+                                if identity:
+                                    law_rows_by_id.setdefault(identity, law)
+            except (httpx.HTTPError, ValueError):
+                continue
+
+        law_docs = []
+        for identity, law in list(law_rows_by_id.items())[:8]:
+            law_id = str(law.get("id") or identity)
+            cached = None
+            if db is not None and law.get("id"):
+                cached = db.query(ExternalLegalSource).filter_by(
+                    provider="OpenLegal Nigeria", source_id=law_id,
+                    material_type="legislation"
+                ).first()
+            if cached is not None and cached.content:
+                law_doc = {
+                    "title": cached.title, "citation": cached.citation,
+                    "court": "", "url": cached.url, "source": cached.provider,
+                    "source_id": law_id, "material_type": "legislation",
+                    "text": cached.content, "cached": True,
+                }
+            else:
+                law_doc = {
+                    "title": law.get("title") or law.get("name") or law.get("law") or "Legislation section",
+                    "citation": law.get("citation") or law.get("section") or law.get("cite_as") or "",
+                    "court": "", "url": law.get("url") or "",
+                    "source": "OpenLegal Nigeria", "source_id": law_id,
+                    "material_type": "legislation",
+                    "text": _flatten_text(law)[:6000], "cached": False,
+                }
+                if db is not None and law.get("id"):
+                    record = ExternalLegalSource(
+                        provider="OpenLegal Nigeria", source_id=law_id,
+                        material_type="legislation", title=law_doc["title"],
+                        citation=law_doc["citation"], court="", url=law_doc["url"],
+                        content=law_doc["text"],
+                        retrieved_at=datetime.now(timezone.utc).replace(tzinfo=None),
+                    )
+                    db.add(record)
+            law_doc["relevance_score"] = _relevance_score(query_terms, law_doc)
+            law_docs.append(law_doc)
+
+        if db is not None:
+            db.commit()
+
+        documents = sorted(
+            judgment_docs + law_docs,
+            key=lambda doc: doc.get("relevance_score", 0),
+            reverse=True,
+        )
+        return {
+            "query": queries[0] if queries else offence,
+            "queries": queries,
+            "total": total_matches,
+            "documents": documents,
+            "judgment_count": len(judgment_docs),
+            "legislation_count": len(law_docs),
+            "cache_hits": sum(1 for doc in documents if doc.get("cached")),
+        }
 
 
 async def assess_researched_case(payload, jurisdiction_name, research):
@@ -350,19 +473,22 @@ async def automated_legal_research(payload: PredictionRequest, db: Session = Dep
         court = db.get(Court, payload.court_id)
         court_name = court.name
     try:
-        research = await search_openlegal_nigeria(payload.offence, payload.facts, court_name)
+        research = await search_openlegal_nigeria(payload.offence, payload.facts, court_name, db)
     except httpx.HTTPStatusError as exc:
         raise HTTPException(status_code=502, detail=f"OpenLegal Nigeria returned HTTP {exc.response.status_code}.")
     except (httpx.HTTPError, ValueError):
         raise HTTPException(status_code=502, detail="Could not reach the OpenLegal Nigeria judgments API.")
     ai_result = await assess_researched_case(payload, jurisdiction.name, research)
     sources = [{"title": d["title"], "citation": d["citation"], "court": d["court"],
-                "url": d["url"], "source": d["source"], "material_type": d.get("material_type", "judgment")} for d in research["documents"]]
+                "url": d["url"], "source": d["source"], "material_type": d.get("material_type", "judgment"),
+                "relevance_score": d.get("relevance_score", 0)} for d in research["documents"]]
     return {
         "status": "research_completed" if research["documents"] else "no_matches",
         "jurisdiction": jurisdiction.name,
         "source_provider": "OpenLegal Nigeria",
         "search_query": research["query"],
+        "search_queries": research.get("queries", [research["query"]]),
+        "cached_source_count": research.get("cache_hits", 0),
         "source_total_matches": research["total"],
         "retrieved_judgment_count": research.get("judgment_count", len(research["documents"])),
         "retrieved_legislation_count": research.get("legislation_count", 0),
