@@ -1,4 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
+import csv
+import io
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 from ..database import get_db
@@ -59,6 +62,36 @@ def update_case(case_id: int, payload: CaseUpdate, db: Session = Depends(get_db)
     db.commit()
     db.refresh(item)
     return item
+
+
+@router.get("/export.csv")
+def export_cases_csv(db: Session = Depends(get_db)):
+    stmt = select(CaseRecord).options(
+        selectinload(CaseRecord.jurisdiction), selectinload(CaseRecord.court),
+        selectinload(CaseRecord.offences).selectinload(CaseOffence.offence),
+        selectinload(CaseRecord.outcomes).selectinload(CaseOutcome.sentences),
+        selectinload(CaseRecord.sources)
+    ).order_by(CaseRecord.decision_date.desc(), CaseRecord.id.desc())
+    records = db.scalars(stmt).unique().all()
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(["Case ID", "Title", "Citation", "Decision date", "Jurisdiction", "Court",
+        "Data status", "Summary", "Facts", "Offences", "Outcomes", "Sentences", "Sources"])
+    for case in records:
+        offences = "; ".join(f"{x.offence.name} ({x.role})" for x in case.offences)
+        outcomes = "; ".join(o.outcome_type for o in case.outcomes)
+        sentences = "; ".join(
+            f"{s.sentence_type}: {s.duration_months if s.duration_months is not None else ''} months; fine {s.fine_amount if s.fine_amount is not None else ''} {s.currency}"
+            for o in case.outcomes for s in o.sentences)
+        sources = "; ".join(x.url or x.citation or x.title for x in case.sources)
+        writer.writerow([case.id, case.title, case.case_reference,
+            case.decision_date.isoformat() if case.decision_date else "",
+            case.jurisdiction.name if case.jurisdiction else "",
+            case.court.name if case.court else "", case.data_status, case.summary, case.facts,
+            offences, outcomes, sentences, sources])
+    buffer.seek(0)
+    return StreamingResponse(iter([buffer.getvalue()]), media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=moai_case_research_export.csv"})
 
 @router.get("/{case_id}/research")
 def get_case_research(case_id: int, db: Session = Depends(get_db)):
