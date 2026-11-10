@@ -3,7 +3,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 from ..database import get_db
 from ..models import CaseRecord, Jurisdiction, Court, Offence, CaseOffence, CaseOutcome, Sentence, CaseSource
-from ..schemas import CaseCreate, CaseOut, ResearchDataCreate
+from ..schemas import CaseCreate, CaseUpdate, CaseOut, ResearchDataCreate
 
 router = APIRouter(prefix="/api/cases", tags=["Cases"])
 
@@ -34,6 +34,28 @@ def create_case(payload: CaseCreate, db: Session = Depends(get_db)):
                       decision_date=payload.decision_date,
                       year=payload.decision_date.year if payload.decision_date else None)
     db.add(item)
+    db.commit()
+    db.refresh(item)
+    return item
+
+@router.put("/{case_id}", response_model=CaseOut)
+def update_case(case_id: int, payload: CaseUpdate, db: Session = Depends(get_db)):
+    item = db.get(CaseRecord, case_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Case not found")
+    changes = payload.model_dump(exclude_unset=True)
+    new_jurisdiction_id = changes.get("jurisdiction_id", item.jurisdiction_id)
+    if "jurisdiction_id" in changes and db.get(Jurisdiction, new_jurisdiction_id) is None:
+        raise HTTPException(status_code=400, detail="Unknown jurisdiction_id")
+    new_court_id = changes.get("court_id", item.court_id)
+    if new_court_id is not None:
+        court = db.get(Court, new_court_id)
+        if court is None or court.jurisdiction_id != new_jurisdiction_id:
+            raise HTTPException(status_code=400, detail="Court must belong to the selected jurisdiction")
+    for field, value in changes.items():
+        setattr(item, field, value)
+    if "decision_date" in changes or "decision_date" not in changes and "year" not in changes:
+        item.year = item.decision_date.year if item.decision_date else None
     db.commit()
     db.refresh(item)
     return item
