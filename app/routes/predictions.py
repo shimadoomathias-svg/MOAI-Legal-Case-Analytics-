@@ -224,8 +224,41 @@ async def search_openlegal_nigeria(offence, facts, court_name=None):
                 "source_id": str(item_id),
                 "text": _flatten_text(merged)[:14000],
             })
-        return {"query": query, "total": payload.get("total", len(rows)) if isinstance(payload, dict) else len(rows),
-                "documents": documents}
+        # The same public API exposes searchable legislation; include it as a separate
+        # evidence type so the model cannot confuse a statutory section with a judgment.
+        law_documents = []
+        try:
+            law_response = await client.get(f"{OPENLEGAL_API}/laws",
+                params={"q": offence, "limit": 5},
+                headers={"Accept": "application/json"})
+            if law_response.status_code < 400:
+                law_payload = law_response.json()
+                law_rows = law_payload.get("results", []) if isinstance(law_payload, dict) else law_payload
+                if isinstance(law_rows, list):
+                    for law in law_rows[:5]:
+                        if not isinstance(law, dict):
+                            continue
+                        law_documents.append({
+                            "material_type": "legislation",
+                            "title": law.get("title") or law.get("name") or law.get("law") or "Legislation section",
+                            "citation": law.get("citation") or law.get("section") or law.get("cite_as") or "",
+                            "court": "",
+                            "url": law.get("url") or "",
+                            "source": "OpenLegal Nigeria",
+                            "source_id": str(law.get("id") or ""),
+                            "text": _flatten_text(law)[:6000],
+                        })
+        except (httpx.HTTPError, ValueError):
+            # A temporary legislation-search failure must not discard judgment results.
+            pass
+        for document in documents:
+            document["material_type"] = "judgment"
+        combined = documents + law_documents
+        return {"query": query,
+                "total": payload.get("total", len(rows)) if isinstance(payload, dict) else len(rows),
+                "documents": combined,
+                "judgment_count": len(documents),
+                "legislation_count": len(law_documents)}
 
 
 async def assess_researched_case(payload, jurisdiction_name, research):
@@ -324,14 +357,15 @@ async def automated_legal_research(payload: PredictionRequest, db: Session = Dep
         raise HTTPException(status_code=502, detail="Could not reach the OpenLegal Nigeria judgments API.")
     ai_result = await assess_researched_case(payload, jurisdiction.name, research)
     sources = [{"title": d["title"], "citation": d["citation"], "court": d["court"],
-                "url": d["url"], "source": d["source"]} for d in research["documents"]]
+                "url": d["url"], "source": d["source"], "material_type": d.get("material_type", "judgment")} for d in research["documents"]]
     return {
         "status": "research_completed" if research["documents"] else "no_matches",
         "jurisdiction": jurisdiction.name,
         "source_provider": "OpenLegal Nigeria",
         "search_query": research["query"],
         "source_total_matches": research["total"],
-        "retrieved_judgment_count": len(research["documents"]),
+        "retrieved_judgment_count": research.get("judgment_count", len(research["documents"])),
+        "retrieved_legislation_count": research.get("legislation_count", 0),
         "research_results": sources,
         "ai_prediction": ai_result,
         "limitations": [
