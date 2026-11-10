@@ -33,10 +33,14 @@ def list_cases(jurisdiction_id: int | None = None, year: int | None = None,
     if sentence_type:
         stmt = stmt.where(CaseRecord.outcomes.any(CaseOutcome.sentences.any(
             func.lower(Sentence.sentence_type) == sentence_type.strip().lower())))
-    if min_sentence_months is not None:
+    if min_sentence_months is not None and max_sentence_months is not None:
+        stmt = stmt.where(CaseRecord.outcomes.any(CaseOutcome.sentences.any(
+            (Sentence.duration_months >= min_sentence_months) &
+            (Sentence.duration_months <= max_sentence_months))))
+    elif min_sentence_months is not None:
         stmt = stmt.where(CaseRecord.outcomes.any(CaseOutcome.sentences.any(
             Sentence.duration_months >= min_sentence_months)))
-    if max_sentence_months is not None:
+    elif max_sentence_months is not None:
         stmt = stmt.where(CaseRecord.outcomes.any(CaseOutcome.sentences.any(
             Sentence.duration_months <= max_sentence_months)))
     if min_sentence_months is not None and max_sentence_months is not None and min_sentence_months > max_sentence_months:
