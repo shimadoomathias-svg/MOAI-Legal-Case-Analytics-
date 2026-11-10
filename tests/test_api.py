@@ -277,3 +277,86 @@ def test_openlegal_connector_searches_judgments_and_legislation(monkeypatch):
     assert result["documents"][0]["material_type"] in {"judgment", "legislation"}
     assert any("dismissed the appeal" in d["text"] for d in result["documents"])
     assert any(d["material_type"] == "legislation" for d in result["documents"])
+
+
+
+def test_courtlistener_connector_retrieves_full_opinion(monkeypatch):
+    import asyncio
+
+    monkeypatch.setenv("COURTLISTENER_API_TOKEN", "test-token")
+
+    class FakeResponse:
+        status_code = 200
+
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self.payload
+
+    class FakeAsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, params=None, headers=None):
+            assert headers["Authorization"] == "Token test-token"
+            if url.endswith("/search/"):
+                assert params["type"] == "o"
+                return FakeResponse({
+                    "count": 1,
+                    "results": [{
+                        "caseName": "Example v State",
+                        "caseNameFull": "Example v. State",
+                        "citation": ["600 U.S. 1"],
+                        "court": "Supreme Court of the United States",
+                        "cluster_id": 12345,
+                        "absolute_url": "/opinion/12345/example-v-state/",
+                        "opinions": [{"id": 67890, "type": "lead-opinion"}]
+                    }]
+                })
+            if url.endswith("/opinions/67890/"):
+                return FakeResponse({
+                    "html_with_citations": "<p>The Court affirmed the judgment.</p>"
+                })
+            raise AssertionError("Unexpected CourtListener endpoint: " + url)
+
+    monkeypatch.setattr(predictions.httpx, "AsyncClient", FakeAsyncClient)
+    result = asyncio.run(predictions.search_courtlistener_us(
+        "constitutional challenge", "The appellant challenged a federal statute."
+    ))
+
+    assert result["judgment_count"] == 1
+    assert result["documents"][0]["source"] == "CourtListener"
+    assert "affirmed the judgment" in result["documents"][0]["text"]
+    assert result["documents"][0]["citation"] == "600 U.S. 1"
+
+
+def test_us_research_requires_courtlistener_token(client, monkeypatch):
+    monkeypatch.delenv("COURTLISTENER_API_TOKEN", raising=False)
+    db_generator = client.app.dependency_overrides[get_db]()
+    db = next(db_generator)
+    jurisdiction = Jurisdiction(
+        name="United States", country_code="USA",
+        legal_system="Common law / mixed state systems"
+    )
+    db.add(jurisdiction)
+    db.commit()
+    db.refresh(jurisdiction)
+    jurisdiction_id = jurisdiction.id
+    db_generator.close()
+
+    response = client.post("/api/predictions/research", json={
+        "jurisdiction_id": jurisdiction_id,
+        "offence": "Constitutional challenge",
+        "facts": "A challenge to a federal statute."
+    })
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "source_not_configured"
+    assert data["source_provider"] == "CourtListener"
