@@ -37,7 +37,7 @@ def estimate_outcome(payload: PredictionRequest, db: Session = Depends(get_db)):
             CaseRecord.data_status == "researcher-entered",
             CaseRecord.sources.any(),
             func.lower(Offence.name) == offence_name.lower(),
-            CaseOffence.role.in_(["charged", "convicted"])
+            func.lower(CaseOffence.role).in_(["charged", "convicted"])
         )
         .options(
             selectinload(CaseRecord.court),
