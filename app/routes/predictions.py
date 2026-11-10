@@ -555,6 +555,11 @@ async def search_courtlistener_us(offence, facts, db=None):
 
 
 async def assess_researched_case(payload, jurisdiction_name, research):
+    if not research.get("documents"):
+        return {
+            "status": "insufficient_evidence",
+            "message": "No legal judgments or legislation were retrieved. The system will not generate an outcome assessment without supporting legal sources."
+        }
     api_key = os.getenv("OPENROUTER_API_KEY")
     if not api_key:
         return {"status": "not_configured",
