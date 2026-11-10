@@ -226,6 +226,9 @@ def test_openlegal_connector_searches_judgments_and_legislation(monkeypatch):
             return self.payload
 
     class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
         async def __aenter__(self):
             return self
 
