@@ -3,7 +3,7 @@ from fastapi.responses import StreamingResponse
 import csv
 import io
 from datetime import date
-from sqlalchemy import select, func
+from sqlalchemy import select, func, and_
 from sqlalchemy.orm import Session, selectinload
 from ..database import get_db
 from ..models import CaseRecord, Jurisdiction, Court, Offence, CaseOffence, CaseOutcome, Sentence, CaseSource, CaseFactor
@@ -78,7 +78,7 @@ def count_cases(jurisdiction_id: int | None = None, year: int | None = None,
     if min_sentence_months is not None and max_sentence_months is not None and min_sentence_months > max_sentence_months:
         raise HTTPException(status_code=400, detail="Minimum sentence duration cannot exceed maximum duration")
     if sentence_conditions:
-        stmt = stmt.where(CaseRecord.outcomes.any(CaseOutcome.sentences.any(*sentence_conditions)))
+        stmt = stmt.where(CaseRecord.outcomes.any(CaseOutcome.sentences.any(and_(*sentence_conditions))))
     if search:
         term = f"%{search.strip()}%"
         stmt = stmt.where((CaseRecord.title.ilike(term)) | (CaseRecord.case_reference.ilike(term)))
