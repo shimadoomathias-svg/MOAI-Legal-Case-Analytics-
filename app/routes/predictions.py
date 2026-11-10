@@ -181,6 +181,14 @@ def _flatten_text(value, limit=14000):
     return "\n".join(dict.fromkeys(chunks))[:limit]
 
 
+def _cache_is_fresh(record, max_age_days):
+    if record is None or not record.content or record.retrieved_at is None:
+        return False
+    stored = record.retrieved_at.replace(tzinfo=None)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    return (now - stored).total_seconds() < max_age_days * 86400
+
+
 def _relevance_score(query_terms, document):
     searchable = " ".join([
         str(document.get("title", "")),
@@ -252,7 +260,7 @@ async def search_openlegal_nigeria(offence, facts, court_name=None, db=None):
                     provider="OpenLegal Nigeria", source_id=source_id,
                     material_type="judgment"
                 ).first()
-            if cached is not None and cached.content:
+            if _cache_is_fresh(cached, 30):
                 return {
                     "title": cached.title, "citation": cached.citation,
                     "court": cached.court, "url": cached.url,
@@ -337,7 +345,7 @@ async def search_openlegal_nigeria(offence, facts, court_name=None, db=None):
                     provider="OpenLegal Nigeria", source_id=law_id,
                     material_type="legislation"
                 ).first()
-            if cached is not None and cached.content:
+            if _cache_is_fresh(cached, 1):
                 law_doc = {
                     "title": cached.title, "citation": cached.citation,
                     "court": "", "url": cached.url, "source": cached.provider,
@@ -403,7 +411,7 @@ async def assess_researched_case(payload, jurisdiction_name, research):
     }
     system = (
         "You are an evidence-grounded legal research and case-outcome assessment assistant. "
-        "Use only the submitted facts and retrieved judgments below. Do not invent case names, "
+        "Use only the submitted facts and retrieved judgments and legislation below. Do not invent case names, "
         "citations, holdings, statutory provisions, sentencing figures, or legal rules. "
         "Distinguish what the judgments actually say from your inference. Explain material "
         "similarities and differences, procedural posture, court level, and missing facts. "
