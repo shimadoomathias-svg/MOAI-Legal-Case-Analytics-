@@ -111,10 +111,13 @@ def test_automated_research_uses_external_judgments_without_local_case_corpus(cl
     jurisdiction_id = jurisdiction.id
     db_generator.close()
 
-    async def fake_search(offence, facts, court_name=None):
+    async def fake_search(offence, facts, court_name=None, db=None):
         return {
             "query": offence,
             "total": 1,
+            "queries": [offence],
+            "judgment_count": 1,
+            "legislation_count": 0,
             "documents": [{
                 "title": "A v B",
                 "citation": "2024 NGSC 1",
@@ -168,3 +171,37 @@ def test_automated_research_does_not_claim_unconnected_jurisdiction_support(clie
     data = response.json()
     assert data["status"] == "source_not_connected"
     assert data["research_results"] == []
+
+
+
+def test_external_source_text_extraction_and_relevance_ranking():
+    source = {
+        "title": "State v Example",
+        "holding": "The Supreme Court considered armed robbery and proof beyond reasonable doubt.",
+        "full_text": "The appeal was dismissed."
+    }
+    extracted = predictions._flatten_text(source)
+    assert "armed robbery" in extracted.lower()
+    score = predictions._relevance_score(
+        predictions.terms("armed robbery proof beyond reasonable doubt"),
+        {"title": "State v Example", "text": extracted}
+    )
+    assert score > 0
+
+
+def test_external_source_cache_expiry():
+    from datetime import datetime, timedelta
+    from app.models import ExternalLegalSource
+
+    fresh = ExternalLegalSource(
+        provider="OpenLegal Nigeria", source_id="case-1",
+        material_type="judgment", content="judgment text",
+        retrieved_at=datetime.utcnow()
+    )
+    stale = ExternalLegalSource(
+        provider="OpenLegal Nigeria", source_id="law-1",
+        material_type="legislation", content="old statutory text",
+        retrieved_at=datetime.utcnow() - timedelta(days=2)
+    )
+    assert predictions._cache_is_fresh(fresh, 30)
+    assert not predictions._cache_is_fresh(stale, 1)
