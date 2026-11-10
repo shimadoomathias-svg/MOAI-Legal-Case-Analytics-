@@ -298,6 +298,9 @@ def test_courtlistener_connector_retrieves_full_opinion(monkeypatch):
             return self.payload
 
     class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
         async def __aenter__(self):
             return self
 
