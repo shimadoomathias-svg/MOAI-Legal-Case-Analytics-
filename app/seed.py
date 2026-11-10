@@ -74,6 +74,9 @@ def seed_database():
         if old_nigeria_court is not None:
             old_nigeria_court.name = "Federal High Court"
             old_nigeria_court.level = "Federal trial court"
+            # SessionLocal disables autoflush, so make the renamed row visible
+            # to the duplicate check below before inserting any court seeds.
+            db.flush()
 
         # Remove "(sample)" from the original starter courts without changing IDs.
         legacy_names = {
@@ -96,6 +99,7 @@ def seed_database():
                 if duplicate is None or duplicate.id == old.id:
                     old.name = new_name
                     old.level = new_level
+                    db.flush()
 
         for name, level, jurisdiction_name in COURT_SEEDS:
             jid = jurisdictions[jurisdiction_name].id
