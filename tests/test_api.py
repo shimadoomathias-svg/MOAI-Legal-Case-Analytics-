@@ -205,3 +205,75 @@ def test_external_source_cache_expiry():
     )
     assert predictions._cache_is_fresh(fresh, 30)
     assert not predictions._cache_is_fresh(stale, 1)
+
+
+
+def test_openlegal_connector_searches_judgments_and_legislation(monkeypatch):
+    import asyncio
+
+    requested_queries = []
+
+    class FakeResponse:
+        status_code = 200
+
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self.payload
+
+    class FakeAsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, params=None, headers=None):
+            if url.endswith("/judgments"):
+                requested_queries.append(params["q"])
+                return FakeResponse({
+                    "total": 1,
+                    "results": [{
+                        "id": "ngsc-example-1",
+                        "title": "State v Example",
+                        "cite_as": "2024 NGSC 1",
+                        "court": "Supreme Court of Nigeria",
+                        "holding": "Armed robbery requires proof beyond reasonable doubt.",
+                        "excerpt": "The appeal concerned armed robbery.",
+                        "url": "https://openlegal.casewinai.com/judgments/ngsc-example-1"
+                    }]
+                })
+            if url.endswith("/judgments/ngsc-example-1"):
+                return FakeResponse({
+                    "full_text": "The Supreme Court dismissed the appeal.",
+                    "issues": ["Proof of armed robbery"],
+                    "holding": "The conviction was affirmed."
+                })
+            if url.endswith("/laws"):
+                return FakeResponse({
+                    "results": [{
+                        "id": "robbery-act-section-1",
+                        "title": "Robbery and Firearms Act",
+                        "section": "Section 1",
+                        "text": "Any person who commits armed robbery..."
+                    }]
+                })
+            raise AssertionError("Unexpected OpenLegal endpoint: " + url)
+
+    monkeypatch.setattr(predictions.httpx, "AsyncClient", FakeAsyncClient)
+    result = asyncio.run(predictions.search_openlegal_nigeria(
+        "Armed robbery",
+        "The accused used a firearm during the robbery.",
+        db=None
+    ))
+
+    assert len(requested_queries) == 2
+    assert result["judgment_count"] == 1
+    assert result["legislation_count"] == 1
+    assert result["documents"][0]["material_type"] in {"judgment", "legislation"}
+    assert any("dismissed the appeal" in d["text"] for d in result["documents"])
+    assert any(d["material_type"] == "legislation" for d in result["documents"])
