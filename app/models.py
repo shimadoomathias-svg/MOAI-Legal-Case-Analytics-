@@ -114,3 +114,22 @@ class CaseFactor(Base):
     category: Mapped[str] = mapped_column(String(100), default="Other")
     description: Mapped[str] = mapped_column(Text)
     case: Mapped[CaseRecord] = relationship(back_populates="factors")
+
+
+
+class ExternalLegalSource(Base):
+    """Cached public legal material retrieved automatically from an authorised provider."""
+    __tablename__ = "external_legal_sources"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    provider: Mapped[str] = mapped_column(String(80), index=True)
+    source_id: Mapped[str] = mapped_column(String(240))
+    material_type: Mapped[str] = mapped_column(String(30), default="judgment")
+    title: Mapped[str] = mapped_column(String(500), default="")
+    citation: Mapped[str] = mapped_column(String(500), default="")
+    court: Mapped[str] = mapped_column(String(240), default="")
+    url: Mapped[str] = mapped_column(Text, default="")
+    content: Mapped[str] = mapped_column(Text, default="")
+    retrieved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    __table_args__ = (
+        UniqueConstraint("provider", "source_id", "material_type", name="uq_external_legal_source"),
+    )
