@@ -10,11 +10,19 @@ from .routes import cases, dashboard, analytics, predictions, ai, metadata
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    print("STARTUP: beginning database table check", flush=True)
     Base.metadata.create_all(bind=engine)
+    print("STARTUP: database tables ready", flush=True)
+
     if engine.dialect.name == "postgresql":
+        print("STARTUP: checking jurisdiction country_code column", flush=True)
         with engine.begin() as connection:
             connection.execute(text("ALTER TABLE jurisdictions ALTER COLUMN country_code TYPE VARCHAR(12)"))
+        print("STARTUP: jurisdiction column check complete", flush=True)
+
+    print("STARTUP: beginning reference-data seeding", flush=True)
     seed_database()
+    print("STARTUP: reference-data seeding complete", flush=True)
     yield
 
 app = FastAPI(title="MOAI Legal Case Analytics API",
