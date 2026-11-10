@@ -83,3 +83,6 @@ class PredictionRequest(BaseModel):
     jurisdiction_id: int
     offence: str = Field(min_length=2, max_length=180)
     court_id: int | None = None
+    facts: str = Field(default="", max_length=6000)
+    aggravating_factors: list[str] = Field(default_factory=list, max_length=20)
+    mitigating_factors: list[str] = Field(default_factory=list, max_length=20)
