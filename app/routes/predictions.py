@@ -243,18 +243,24 @@ async def search_openlegal_nigeria(offence, facts, court_name=None, db=None):
     """Search and retrieve public Nigerian judgments and legislation via OpenLegal's documented API."""
     offence_text = (offence or "").strip()
     offence_lower = offence_text.lower()
-    # Search legal issue terminology rather than the opening words of a fact narrative.
+    # Expand offence labels into the legal issues courts commonly use in judgments.
     if "robbery" in offence_lower:
-        query_candidates = [offence_text, "armed robbery firearm"]
+        query_candidates = [offence_text, "armed robbery", "robbery with firearms", "robbery and firearms"]
+        law_queries = ["Robbery and Firearms (Special Provisions) Act", "armed robbery"]
+    elif "homicide" in offence_lower or "murder" in offence_lower or "manslaughter" in offence_lower:
+        query_candidates = [
+            offence_text, "murder", "culpable homicide", "self defence homicide",
+            "provocation murder", "cause of death homicide",
+        ]
         law_queries = [
-            "Robbery and Firearms (Special Provisions) Act",
-            "armed robbery firearm",
+            "Criminal Code Act murder", "Penal Code culpable homicide",
+            "murder", "self defence", "provocation",
         ]
     else:
-        query_candidates = [offence_text, offence_text]
+        query_candidates = [offence_text]
         law_queries = [offence_text]
     queries = list(dict.fromkeys(q for q in query_candidates if q))
-    query_terms = terms(offence_text)
+    query_terms = terms(offence_text + " " + " ".join(queries))
     headers = {"Accept": "application/json", "User-Agent": "MOAI-Legal-Case-Analytics/1.0"}
     async with httpx.AsyncClient(timeout=25, follow_redirects=True) as client:
         async def fetch_search(query):
@@ -271,6 +277,9 @@ async def search_openlegal_nigeria(offence, facts, court_name=None, db=None):
                 data.get("total", len(rows)) if isinstance(data, dict) else len(rows)
             )
 
+        # Search across the selected court first. If that produces no hits,
+        # retry the same legal queries across all publishing courts so a default
+        # court selection cannot silently hide otherwise relevant authorities.
         search_responses = await asyncio.gather(*(fetch_search(q) for q in queries))
         rows_by_id = {}
         total_matches = 0
@@ -279,6 +288,27 @@ async def search_openlegal_nigeria(offence, facts, court_name=None, db=None):
             for row in rows:
                 if isinstance(row, dict) and row.get("id"):
                     rows_by_id.setdefault(str(row["id"]), row)
+        court_filter_relaxed = False
+        if not rows_by_id and court_name:
+            court_filter_relaxed = True
+            async def fetch_unfiltered(query):
+                response = await client.get(
+                    f"{OPENLEGAL_API}/judgments",
+                    params={"q": query, "limit": 10, "page": 1},
+                    headers=headers,
+                )
+                response.raise_for_status()
+                data = response.json()
+                rows = data.get("results", []) if isinstance(data, dict) else data
+                return rows if isinstance(rows, list) else [], (
+                    data.get("total", len(rows)) if isinstance(data, dict) else len(rows)
+                )
+            fallback_responses = await asyncio.gather(*(fetch_unfiltered(q) for q in queries))
+            for rows, total in fallback_responses:
+                total_matches += int(total or 0)
+                for row in rows:
+                    if isinstance(row, dict) and row.get("id"):
+                        rows_by_id.setdefault(str(row["id"]), row)
 
         # Fetch the strongest candidate summaries first; source ranking is only
         # a retrieval aid and is never represented as legal similarity.
@@ -433,6 +463,7 @@ async def search_openlegal_nigeria(offence, facts, court_name=None, db=None):
         return {
             "query": queries[0] if queries else offence,
             "queries": queries,
+            "court_filter_relaxed": court_filter_relaxed,
             "total": total_matches,
             "documents": documents,
             "judgment_count": len(judgment_docs),
@@ -794,6 +825,7 @@ async def automated_legal_research(payload: PredictionRequest, db: Session = Dep
         "source_provider": source_provider,
         "search_query": research["query"],
         "search_queries": research.get("queries", [research["query"]]),
+        "court_filter_relaxed": research.get("court_filter_relaxed", False),
         "cached_source_count": research.get("cache_hits", 0),
         "source_total_matches": research["total"],
         "retrieved_judgment_count": research.get("judgment_count", len(research["documents"])),
