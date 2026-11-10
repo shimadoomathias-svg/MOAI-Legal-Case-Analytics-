@@ -372,7 +372,7 @@ def test_us_research_requires_courtlistener_token(client, monkeypatch):
 def test_setup_status_never_exposes_secret_values(client, monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "private-openrouter-secret")
     monkeypatch.setenv("COURTLISTENER_API_TOKEN", "private-courtlistener-secret")
-    response = client.get("/api/setup/status")
+    response = client.get("/api/predictions/setup-status")
     assert response.status_code == 200
     payload = response.json()
     rendered = str(payload)
