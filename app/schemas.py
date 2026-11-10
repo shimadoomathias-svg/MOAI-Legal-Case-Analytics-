@@ -19,6 +19,16 @@ class CaseCreate(BaseModel):
     facts: str = ""
     data_status: str = "researcher-entered"
 
+class CaseUpdate(BaseModel):
+    case_reference: str | None = Field(default=None, min_length=1, max_length=180)
+    title: str | None = Field(default=None, min_length=1, max_length=240)
+    jurisdiction_id: int | None = None
+    court_id: int | None = None
+    decision_date: date | None = None
+    summary: str | None = None
+    facts: str | None = None
+    data_status: str | None = None
+
 class CaseOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
