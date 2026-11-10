@@ -125,72 +125,72 @@ async def import_cases_csv(request: Request, db: Session = Depends(get_db)):
     for line_number, raw_row in enumerate(rows, start=2):
         row = {(k or "").strip(): (v or "").strip() for k, v in raw_row.items()}
         try:
-            title = row.get("title", "")
-            reference = row.get("case_reference", "")
-            jurisdiction_name = row.get("jurisdiction", "")
-            if not title or not reference or not jurisdiction_name:
-                raise ValueError("title, case_reference and jurisdiction are required")
-            jurisdiction = db.scalar(select(Jurisdiction).where(func.lower(Jurisdiction.name) == jurisdiction_name.lower()))
-            if jurisdiction is None:
-                raise ValueError(f"Unknown jurisdiction: {jurisdiction_name}")
-            court = None
-            if row.get("court"):
-                court = db.scalar(select(Court).where(
-                    func.lower(Court.name) == row["court"].lower(),
-                    Court.jurisdiction_id == jurisdiction.id))
-                if court is None:
-                    raise ValueError(f"Court not found in {jurisdiction.name}: {row['court']}")
-            decision_date = date.fromisoformat(row["decision_date"]) if row.get("decision_date") else None
-            status = row.get("data_status", "unverified").lower()
-            if status not in {"researcher-entered", "unverified", "synthetic"}:
-                raise ValueError("data_status must be researcher-entered, unverified or synthetic")
-            source_url = row.get("source_url", "")
-            if source_url and not source_url.startswith(("https://", "http://")):
-                raise ValueError("source_url must begin with http:// or https://")
-            source_citation = row.get("source_citation", "")
-            source_title = row.get("source_title", "")
-            if status == "researcher-entered" and not (source_url or source_citation or source_title):
-                status = "unverified"
-            item = CaseRecord(
-                title=title, case_reference=reference, jurisdiction_id=jurisdiction.id,
-                court_id=court.id if court else None, decision_date=decision_date,
-                year=decision_date.year if decision_date else None,
-                summary=row.get("summary", ""), facts=row.get("facts", ""), data_status=status)
-            db.add(item)
-            db.flush()
-            if source_url or source_citation or source_title:
-                db.add(CaseSource(case_id=item.id, source_type="judgment",
-                    title=source_title, citation=source_citation, url=source_url))
-            offence_name = row.get("offence", "")
-            if offence_name:
-                offence = db.scalar(select(Offence).where(
-                    func.lower(Offence.name) == offence_name.lower(),
-                    Offence.jurisdiction_id == jurisdiction.id))
-                if offence is None:
-                    offence = Offence(name=offence_name, jurisdiction_id=jurisdiction.id)
-                    db.add(offence)
-                    db.flush()
-                db.add(CaseOffence(case_id=item.id, offence_id=offence.id,
-                    role=row.get("offence_role", "charged") or "charged"))
-            outcome_type = row.get("outcome_type", "").lower()
-            if outcome_type:
-                outcome = CaseOutcome(case_id=item.id, outcome_type=outcome_type,
-                    notes=row.get("outcome_notes", ""))
-                db.add(outcome)
+            with db.begin_nested():
+                title = row.get("title", "")
+                reference = row.get("case_reference", "")
+                jurisdiction_name = row.get("jurisdiction", "")
+                if not title or not reference or not jurisdiction_name:
+                    raise ValueError("title, case_reference and jurisdiction are required")
+                jurisdiction = db.scalar(select(Jurisdiction).where(func.lower(Jurisdiction.name) == jurisdiction_name.lower()))
+                if jurisdiction is None:
+                    raise ValueError(f"Unknown jurisdiction: {jurisdiction_name}")
+                court = None
+                if row.get("court"):
+                    court = db.scalar(select(Court).where(
+                        func.lower(Court.name) == row["court"].lower(),
+                        Court.jurisdiction_id == jurisdiction.id))
+                    if court is None:
+                        raise ValueError(f"Court not found in {jurisdiction.name}: {row['court']}")
+                decision_date = date.fromisoformat(row["decision_date"]) if row.get("decision_date") else None
+                status = row.get("data_status", "unverified").lower()
+                if status not in {"researcher-entered", "unverified", "synthetic"}:
+                    raise ValueError("data_status must be researcher-entered, unverified or synthetic")
+                source_url = row.get("source_url", "")
+                if source_url and not source_url.startswith(("https://", "http://")):
+                    raise ValueError("source_url must begin with http:// or https://")
+                source_citation = row.get("source_citation", "")
+                source_title = row.get("source_title", "")
+                if status == "researcher-entered" and not (source_url or source_citation or source_title):
+                    status = "unverified"
+                item = CaseRecord(
+                    title=title, case_reference=reference, jurisdiction_id=jurisdiction.id,
+                    court_id=court.id if court else None, decision_date=decision_date,
+                    year=decision_date.year if decision_date else None,
+                    summary=row.get("summary", ""), facts=row.get("facts", ""), data_status=status)
+                db.add(item)
                 db.flush()
-                sentence_type = row.get("sentence_type", "")
-                duration = float(row["duration_months"]) if row.get("duration_months") else None
-                fine = float(row["fine_amount"]) if row.get("fine_amount") else None
-                if sentence_type or duration is not None or fine is not None:
-                    suspended = row.get("is_suspended", "false").lower() in {"true", "1", "yes"}
-                    db.add(Sentence(outcome_id=outcome.id,
-                        sentence_type=sentence_type or "Unspecified",
-                        duration_months=duration, fine_amount=fine,
-                        currency=row.get("currency", "").upper(), is_suspended=suspended))
-            db.flush()
-            imported += 1
+                if source_url or source_citation or source_title:
+                    db.add(CaseSource(case_id=item.id, source_type="judgment",
+                        title=source_title, citation=source_citation, url=source_url))
+                offence_name = row.get("offence", "")
+                if offence_name:
+                    offence = db.scalar(select(Offence).where(
+                        func.lower(Offence.name) == offence_name.lower(),
+                        Offence.jurisdiction_id == jurisdiction.id))
+                    if offence is None:
+                        offence = Offence(name=offence_name, jurisdiction_id=jurisdiction.id)
+                        db.add(offence)
+                        db.flush()
+                    db.add(CaseOffence(case_id=item.id, offence_id=offence.id,
+                        role=row.get("offence_role", "charged") or "charged"))
+                outcome_type = row.get("outcome_type", "").lower()
+                if outcome_type:
+                    outcome = CaseOutcome(case_id=item.id, outcome_type=outcome_type,
+                        notes=row.get("outcome_notes", ""))
+                    db.add(outcome)
+                    db.flush()
+                    sentence_type = row.get("sentence_type", "")
+                    duration = float(row["duration_months"]) if row.get("duration_months") else None
+                    fine = float(row["fine_amount"]) if row.get("fine_amount") else None
+                    if sentence_type or duration is not None or fine is not None:
+                        suspended = row.get("is_suspended", "false").lower() in {"true", "1", "yes"}
+                        db.add(Sentence(outcome_id=outcome.id,
+                            sentence_type=sentence_type or "Unspecified",
+                            duration_months=duration, fine_amount=fine,
+                            currency=row.get("currency", "").upper(), is_suspended=suspended))
+                db.flush()
+                imported += 1
         except Exception as exc:
-            db.rollback()
             errors.append({"row": line_number, "error": str(exc)})
     if imported:
         db.commit()
