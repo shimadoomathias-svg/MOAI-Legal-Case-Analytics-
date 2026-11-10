@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pathlib import Path
+from sqlalchemy import text
 from .database import Base, engine
 from .seed import seed_database
 from .routes import cases, dashboard, analytics, predictions, ai, metadata
@@ -10,6 +11,9 @@ from .routes import cases, dashboard, analytics, predictions, ai, metadata
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
+    if engine.dialect.name == "postgresql":
+        with engine.begin() as connection:
+            connection.execute(text("ALTER TABLE jurisdictions ALTER COLUMN country_code TYPE VARCHAR(12)"))
     seed_database()
     yield
 
