@@ -6,7 +6,7 @@ from datetime import date
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session, selectinload
 from ..database import get_db
-from ..models import CaseRecord, Jurisdiction, Court, Offence, CaseOffence, CaseOutcome, Sentence, CaseSource
+from ..models import CaseRecord, Jurisdiction, Court, Offence, CaseOffence, CaseOutcome, Sentence, CaseSource, CaseFactor
 from ..schemas import CaseCreate, CaseUpdate, CaseOut, ResearchDataCreate
 
 router = APIRouter(prefix="/api/cases", tags=["Cases"])
@@ -96,11 +96,11 @@ def import_template():
     writer.writerow(["title", "case_reference", "jurisdiction", "court", "decision_date",
         "summary", "facts", "data_status", "source_title", "source_citation", "source_url",
         "offence", "offence_role", "outcome_type", "outcome_notes", "sentence_type",
-        "duration_months", "fine_amount", "currency", "is_suspended"])
+        "duration_months", "fine_amount", "currency", "is_suspended", "factor_type", "factor_category", "factor_description"])
     writer.writerow(["Example v Example", "Neutral citation", "Nigeria", "", "2024-01-15",
         "Short factual summary", "Material facts", "unverified", "Judgment source",
         "Source citation", "https://example.org/judgment", "Theft", "convicted",
-        "conviction", "", "Imprisonment", "12", "", "NGN", "false"])
+        "conviction", "", "Imprisonment", "12", "", "NGN", "false", "mitigating", "Personal circumstances", "First-time offender where established by the record"])
     buffer.seek(0)
     return StreamingResponse(iter([buffer.getvalue()]), media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=moai_case_import_template.csv"})
@@ -177,7 +177,15 @@ async def import_cases_csv(request: Request, db: Session = Depends(get_db)):
                         db.flush()
                     db.add(CaseOffence(case_id=item.id, offence_id=offence.id,
                         role=row.get("offence_role", "charged") or "charged"))
-                outcome_type = row.get("outcome_type", "").lower()
+                factor_description = row.get("factor_description", "")
+            if factor_description:
+                factor_type = row.get("factor_type", "mitigating").lower() or "mitigating"
+                if factor_type not in {"aggravating", "mitigating", "neutral"}:
+                    raise ValueError("factor_type must be aggravating, mitigating or neutral")
+                db.add(CaseFactor(case_id=item.id, factor_type=factor_type,
+                    category=row.get("factor_category", "Other") or "Other",
+                    description=factor_description))
+            outcome_type = row.get("outcome_type", "").lower()
                 if outcome_type:
                     outcome = CaseOutcome(case_id=item.id, outcome_type=outcome_type,
                         notes=row.get("outcome_notes", ""))
@@ -208,13 +216,13 @@ def export_cases_csv(db: Session = Depends(get_db)):
         selectinload(CaseRecord.jurisdiction), selectinload(CaseRecord.court),
         selectinload(CaseRecord.offences).selectinload(CaseOffence.offence),
         selectinload(CaseRecord.outcomes).selectinload(CaseOutcome.sentences),
-        selectinload(CaseRecord.sources)
+        selectinload(CaseRecord.sources), selectinload(CaseRecord.factors)
     ).order_by(CaseRecord.decision_date.desc(), CaseRecord.id.desc())
     records = db.scalars(stmt).unique().all()
     buffer = io.StringIO()
     writer = csv.writer(buffer)
     writer.writerow(["Case ID", "Title", "Citation", "Decision date", "Jurisdiction", "Court",
-        "Data status", "Summary", "Facts", "Offences", "Outcomes", "Sentences", "Sources"])
+        "Data status", "Summary", "Facts", "Offences", "Outcomes", "Sentences", "Sources", "Factors"])
     for case in records:
         offences = "; ".join(f"{x.offence.name} ({x.role})" for x in case.offences)
         outcomes = "; ".join(o.outcome_type for o in case.outcomes)
@@ -222,11 +230,12 @@ def export_cases_csv(db: Session = Depends(get_db)):
             f"{s.sentence_type}: {s.duration_months if s.duration_months is not None else ''} months; fine {s.fine_amount if s.fine_amount is not None else ''} {s.currency}"
             for o in case.outcomes for s in o.sentences)
         sources = "; ".join(x.url or x.citation or x.title for x in case.sources)
+        factors = "; ".join(f"{x.factor_type}: {x.category}: {x.description}" for x in case.factors)
         writer.writerow([case.id, case.title, case.case_reference,
             case.decision_date.isoformat() if case.decision_date else "",
             case.jurisdiction.name if case.jurisdiction else "",
             case.court.name if case.court else "", case.data_status, case.summary, case.facts,
-            offences, outcomes, sentences, sources])
+            offences, outcomes, sentences, sources, factors])
     buffer.seek(0)
     return StreamingResponse(iter([buffer.getvalue()]), media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=moai_case_research_export.csv"})
@@ -237,7 +246,7 @@ def get_case_research(case_id: int, db: Session = Depends(get_db)):
         selectinload(CaseRecord.jurisdiction), selectinload(CaseRecord.court),
         selectinload(CaseRecord.offences).selectinload(CaseOffence.offence),
         selectinload(CaseRecord.outcomes).selectinload(CaseOutcome.sentences),
-        selectinload(CaseRecord.sources)))
+        selectinload(CaseRecord.sources), selectinload(CaseRecord.factors)))
     if item is None:
         raise HTTPException(status_code=404, detail="Case not found")
     return {
@@ -250,6 +259,7 @@ def get_case_research(case_id: int, db: Session = Depends(get_db)):
                                      "fine_amount": s.fine_amount, "currency": s.currency,
                                      "is_suspended": s.is_suspended, "notes": s.notes} for s in o.sentences]}
                      for o in item.outcomes],
+        "factors": [{"id": f.id, "factor_type": f.factor_type, "category": f.category, "description": f.description} for f in item.factors],
         "sources": [{"id": s.id, "source_type": s.source_type, "title": s.title, "url": s.url,
                      "citation": s.citation, "accessed_on": s.accessed_on.isoformat() if s.accessed_on else None}
                     for s in item.sources]
@@ -261,6 +271,9 @@ def add_case_research(case_id: int, payload: ResearchDataCreate, db: Session = D
     if item is None:
         raise HTTPException(status_code=404, detail="Case not found")
     try:
+        for entry in payload.factors:
+            db.add(CaseFactor(case_id=case_id, factor_type=entry.factor_type,
+                category=entry.category, description=entry.description))
         for entry in payload.offences:
             name = entry.name.strip()
             if not name:
