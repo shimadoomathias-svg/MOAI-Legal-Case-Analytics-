@@ -50,6 +50,41 @@ def list_cases(jurisdiction_id: int | None = None, year: int | None = None,
         stmt = stmt.where((CaseRecord.title.ilike(term)) | (CaseRecord.case_reference.ilike(term)))
     return db.scalars(stmt.offset(offset).limit(limit)).all()
 
+@router.get("/count")
+def count_cases(jurisdiction_id: int | None = None, year: int | None = None,
+                verdict: str | None = None, offence: str | None = None,
+                court_id: int | None = None, sentence_type: str | None = None,
+                min_sentence_months: float | None = Query(default=None, ge=0),
+                max_sentence_months: float | None = Query(default=None, ge=0),
+                search: str | None = None, db: Session = Depends(get_db)):
+    stmt = select(func.count(func.distinct(CaseRecord.id))).select_from(CaseRecord)
+    if jurisdiction_id is not None:
+        stmt = stmt.where(CaseRecord.jurisdiction_id == jurisdiction_id)
+    if year is not None:
+        stmt = stmt.where(CaseRecord.year == year)
+    if court_id is not None:
+        stmt = stmt.where(CaseRecord.court_id == court_id)
+    if verdict:
+        stmt = stmt.where(CaseRecord.outcomes.any(func.lower(CaseOutcome.outcome_type) == verdict.strip().lower()))
+    if offence:
+        stmt = stmt.where(CaseRecord.offences.any(CaseOffence.offence.has(func.lower(Offence.name) == offence.strip().lower())))
+    sentence_conditions = []
+    if sentence_type:
+        sentence_conditions.append(func.lower(Sentence.sentence_type) == sentence_type.strip().lower())
+    if min_sentence_months is not None:
+        sentence_conditions.append(Sentence.duration_months >= min_sentence_months)
+    if max_sentence_months is not None:
+        sentence_conditions.append(Sentence.duration_months <= max_sentence_months)
+    if min_sentence_months is not None and max_sentence_months is not None and min_sentence_months > max_sentence_months:
+        raise HTTPException(status_code=400, detail="Minimum sentence duration cannot exceed maximum duration")
+    if sentence_conditions:
+        stmt = stmt.where(CaseRecord.outcomes.any(CaseOutcome.sentences.any(*sentence_conditions)))
+    if search:
+        term = f"%{search.strip()}%"
+        stmt = stmt.where((CaseRecord.title.ilike(term)) | (CaseRecord.case_reference.ilike(term)))
+    return {"total": db.scalar(stmt) or 0}
+
+
 @router.post("", response_model=CaseOut, status_code=201)
 def create_case(payload: CaseCreate, db: Session = Depends(get_db)):
     if db.get(Jurisdiction, payload.jurisdiction_id) is None:
