@@ -137,7 +137,7 @@ def estimate_outcome(payload: PredictionRequest, db: Session = Depends(get_db)):
         return {
             **base,
             "status": "insufficient_data",
-            "message": f"Only {count} verified comparable case record(s) were found. At least {MINIMUM_COMPARABLE_CASES} are required before displaying statistical outcome estimates.",
+            "message": f"Only {count} sourced researcher-entered comparable case record(s) were found. At least {MINIMUM_COMPARABLE_CASES} are required before displaying statistical outcome estimates.",
             "outcome_distribution": None,
             "sentence_statistics": None
         }
