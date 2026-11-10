@@ -1,6 +1,7 @@
 import asyncio
 import os
 import re
+from html.parser import HTMLParser
 from datetime import datetime, timezone
 from statistics import median
 
@@ -393,6 +394,155 @@ async def search_openlegal_nigeria(offence, facts, court_name=None, db=None):
             "judgment_count": len(judgment_docs),
             "legislation_count": len(law_docs),
             "cache_hits": sum(1 for doc in documents if doc.get("cached")),
+        }
+
+
+class _HTMLTextExtractor(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts = []
+
+    def handle_data(self, data):
+        if data and data.strip():
+            self.parts.append(data.strip())
+
+
+def _html_to_text(value):
+    parser = _HTMLTextExtractor()
+    try:
+        parser.feed(value or "")
+        return re.sub(r"\s+", " ", " ".join(parser.parts)).strip()
+    except Exception:
+        return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", value or "")).strip()
+
+
+async def search_courtlistener_us(offence, facts, db=None):
+    """Search US published opinions through the authenticated CourtListener v4 API."""
+    token = os.getenv("COURTLISTENER_API_TOKEN")
+    if not token:
+        return {
+            "status": "not_configured",
+            "message": "United States research requires a CourtListener API token in the deployment environment.",
+            "query": offence, "queries": [offence], "total": 0,
+            "documents": [], "judgment_count": 0, "legislation_count": 0,
+            "cache_hits": 0,
+        }
+
+    fact_words = [
+        word for word in re.findall(r"[A-Za-z][A-Za-z-]{3,}", facts or "")
+        if word.lower() not in STOP_WORDS
+    ]
+    query = " ".join([offence.strip()] + list(dict.fromkeys(fact_words[:6])))
+    headers = {
+        "Authorization": f"Token {token}",
+        "Accept": "application/json",
+        "User-Agent": "MOAI-Legal-Case-Analytics/1.0",
+    }
+    base = "https://www.courtlistener.com/api/rest/v4"
+    async with httpx.AsyncClient(timeout=25, follow_redirects=True) as client:
+        response = await client.get(
+            f"{base}/search/", params={"q": query, "type": "o"}, headers=headers
+        )
+        if response.status_code == 401:
+            return {
+                "status": "authentication_failed",
+                "message": "CourtListener rejected the configured API token.",
+                "query": query, "queries": [query], "total": 0,
+                "documents": [], "judgment_count": 0, "legislation_count": 0,
+                "cache_hits": 0,
+            }
+        response.raise_for_status()
+        payload = response.json()
+        rows = payload.get("results", []) if isinstance(payload, dict) else []
+        if not isinstance(rows, list):
+            rows = []
+
+        # Search results are already ranked by CourtListener's search engine.
+        # Keep the request budget below the documented five requests/minute.
+        selected_rows = rows[:3]
+        query_terms = terms(offence + " " + (facts or ""))
+        documents = []
+        cache_hits = 0
+        for row in selected_rows:
+            if not isinstance(row, dict):
+                continue
+            opinions = row.get("opinions") or []
+            opinion = next(
+                (item for item in opinions if isinstance(item, dict)
+                 and "lead" in str(item.get("type", "")).lower()),
+                next((item for item in opinions if isinstance(item, dict)), {})
+            )
+            opinion_id = opinion.get("id")
+            cluster_id = row.get("cluster_id")
+            if not opinion_id:
+                continue
+            source_id = f"{cluster_id or 'cluster'}:{opinion_id}"
+            cached = None
+            if db is not None:
+                cached = db.query(ExternalLegalSource).filter_by(
+                    provider="CourtListener", source_id=source_id,
+                    material_type="judgment"
+                ).first()
+            if _cache_is_fresh(cached, 30):
+                cache_hits += 1
+                text_content = cached.content
+                title, citation, court, url = (
+                    cached.title, cached.citation, cached.court, cached.url
+                )
+                completeness = "cached_opinion_text"
+            else:
+                detail = {}
+                detail_response = await client.get(
+                    f"{base}/opinions/{opinion_id}/", headers=headers
+                )
+                if detail_response.status_code < 400:
+                    detail = detail_response.json()
+                title = row.get("caseNameFull") or row.get("caseName") or "Untitled opinion"
+                citations = row.get("citation") or []
+                citation = "; ".join(str(item) for item in citations) if isinstance(citations, list) else str(citations)
+                court = row.get("court") or ""
+                absolute_url = row.get("absolute_url") or ""
+                url = absolute_url if absolute_url.startswith("http") else (
+                    "https://www.courtlistener.com" + absolute_url
+                    if absolute_url else f"https://www.courtlistener.com/opinion/{cluster_id}/"
+                )
+                html_text = detail.get("html_with_citations") or detail.get("html") or ""
+                text_content = _html_to_text(html_text)
+                completeness = "full_opinion_text"
+                if not text_content:
+                    text_content = detail.get("plain_text") or opinion.get("snippet") or row.get("snippet") or ""
+                    completeness = "search_snippet_only"
+                if db is not None and text_content:
+                    record = cached or ExternalLegalSource(
+                        provider="CourtListener", source_id=source_id,
+                        material_type="judgment"
+                    )
+                    record.title, record.citation = title, citation
+                    record.court, record.url, record.content = court, url, text_content[:14000]
+                    record.retrieved_at = datetime.now(timezone.utc).replace(tzinfo=None)
+                    db.add(record)
+
+            document = {
+                "title": title, "citation": citation, "court": court,
+                "url": url, "source": "CourtListener",
+                "source_id": source_id, "material_type": "judgment",
+                "text": text_content[:14000],
+                "content_completeness": completeness,
+            }
+            document["relevance_score"] = _relevance_score(query_terms, document)
+            documents.append(document)
+
+        if db is not None:
+            db.commit()
+        documents.sort(key=lambda item: item.get("relevance_score", 0), reverse=True)
+        return {
+            "status": "research_completed" if documents else "no_matches",
+            "query": query, "queries": [query],
+            "total": payload.get("count", len(rows)),
+            "documents": documents,
+            "judgment_count": len(documents),
+            "legislation_count": 0,
+            "cache_hits": cache_hits,
         }
 
 
