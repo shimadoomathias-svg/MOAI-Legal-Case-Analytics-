@@ -52,6 +52,7 @@ class CaseRecord(Base):
     offences: Mapped[list["CaseOffence"]] = relationship(back_populates="case", cascade="all, delete-orphan")
     outcomes: Mapped[list["CaseOutcome"]] = relationship(back_populates="case", cascade="all, delete-orphan")
     sources: Mapped[list["CaseSource"]] = relationship(back_populates="case", cascade="all, delete-orphan")
+    factors: Mapped[list["CaseFactor"]] = relationship(back_populates="case", cascade="all, delete-orphan")
 
 class CaseOffence(Base):
     __tablename__ = "case_offences"
@@ -103,3 +104,13 @@ class Researcher(Base):
     role: Mapped[str] = mapped_column(String(30), default="researcher")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class CaseFactor(Base):
+    __tablename__ = "case_factors"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    case_id: Mapped[int] = mapped_column(ForeignKey("cases.id", ondelete="CASCADE"), index=True)
+    factor_type: Mapped[str] = mapped_column(String(30), default="mitigating")
+    category: Mapped[str] = mapped_column(String(100), default="Other")
+    description: Mapped[str] = mapped_column(Text)
+    case: Mapped[CaseRecord] = relationship(back_populates="factors")
