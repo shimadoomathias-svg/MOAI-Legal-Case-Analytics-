@@ -443,6 +443,14 @@ async def search_courtlistener_us(offence, facts, db=None):
         response = await client.get(
             f"{base}/search/", params={"q": query, "type": "o"}, headers=headers
         )
+        if response.status_code == 429:
+            return {
+                "status": "rate_limited",
+                "message": "CourtListener's API rate limit has been reached. Wait before retrying.",
+                "query": query, "queries": [query], "total": 0,
+                "documents": [], "judgment_count": 0, "legislation_count": 0,
+                "cache_hits": 0,
+            }
         if response.status_code == 401:
             return {
                 "status": "authentication_failed",
@@ -569,7 +577,7 @@ async def assess_researched_case(payload, jurisdiction_name, research):
         selected_material.append({
             **{k: source.get(k) for k in (
                 "title", "citation", "court", "url", "source",
-                "material_type", "relevance_score"
+                "material_type", "relevance_score", "content_completeness"
             )},
             "text": (source.get("text") or "")[
                 :7000 if source.get("material_type") == "judgment" else 3500
@@ -661,8 +669,19 @@ async def automated_legal_research(payload: PredictionRequest, db: Session = Dep
             )
     elif country_code == "USA":
         source_provider = "CourtListener"
-        research = await search_courtlistener_us(payload.offence, payload.facts, db)
-        if research["status"] in {"not_configured", "authentication_failed"}:
+        try:
+            research = await search_courtlistener_us(payload.offence, payload.facts, db)
+        except httpx.HTTPStatusError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"CourtListener returned HTTP {exc.response.status_code}."
+            )
+        except (httpx.HTTPError, ValueError):
+            raise HTTPException(
+                status_code=502,
+                detail="Could not reach the CourtListener legal research API."
+            )
+        if research["status"] in {"not_configured", "authentication_failed", "rate_limited"}:
             return {
                 "status": "source_not_configured",
                 "jurisdiction": jurisdiction.name,
