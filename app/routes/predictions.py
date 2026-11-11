@@ -156,6 +156,11 @@ def setup_status():
             {"name": "OpenLegal Nigeria", "jurisdiction": "Nigeria",
              "configured": True, "credential_required": False, "ready": True,
              "mode": "automated REST API", "coverage_note": "Published judgments indexed by OpenLegal only"},
+            {"name": "NigeriaLII", "jurisdiction": "Nigeria",
+             "configured": False, "credential_required": False, "ready": False,
+             "mode": "manual search; API access not yet authorised or integrated",
+             "url": "https://nigerialii.org/judgments/",
+             "coverage_note": "Public catalogue lists about 1,953 judgments. The provider permits API access but prohibits scraping and bulk downloading; automated access terms and API details must be confirmed."},
             {"name": "Supreme Court of Nigeria judgment portal", "jurisdiction": "Nigeria",
              "configured": False, "credential_required": False, "ready": False,
              "mode": "official manual search link only",
@@ -901,6 +906,12 @@ async def automated_legal_research(payload: PredictionRequest, db: Session = Dep
         ],
         "source_diagnostics": research.get("source_diagnostics", {}),
         "additional_research_routes": [
+            {
+                "name": "NigeriaLII — Nigerian judgments database",
+                "url": "https://nigerialii.org/judgments/",
+                "mode": "manual_search_api_access_not_yet_integrated",
+                "note": "NigeriaLII lists about 1,953 judgments. Its terms permit API access but prohibit scraping and bulk downloading. MOAI has not integrated it because approved API details and access conditions have not yet been confirmed."
+            },
             {
                 "name": "Supreme Court of Nigeria — official judgment search",
                 "url": "https://www.website.supremecourt.gov.ng/judgment",
