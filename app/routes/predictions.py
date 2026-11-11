@@ -252,6 +252,16 @@ async def search_openlegal_nigeria(offence, facts, court_name=None, db=None):
             offence_text, "murder", "culpable homicide", "self defence homicide",
             "provocation murder", "cause of death homicide",
         ]
+        fact_text = (facts or "").lower()
+        # Add issue-focused searches only where the submitted facts actually raise them.
+        if any(term in fact_text for term in ("self-defence", "self defence", "self defense")):
+            query_candidates.append("self defence homicide")
+        if any(term in fact_text for term in ("eyewitness", "eye witness", "witness")):
+            query_candidates.append("eyewitness murder")
+        if any(term in fact_text for term in ("medical", "hospital", "autopsy", "cause of death")):
+            query_candidates.append("medical evidence homicide")
+        if any(term in fact_text for term in ("weapon", "wooden object", "knife", "gun", "firearm")):
+            query_candidates.append("weapon murder")
         law_queries = [
             "Criminal Code Act murder", "Penal Code culpable homicide",
             "murder", "self defence", "provocation",
@@ -260,7 +270,9 @@ async def search_openlegal_nigeria(offence, facts, court_name=None, db=None):
         query_candidates = [offence_text]
         law_queries = [offence_text]
     queries = list(dict.fromkeys(q for q in query_candidates if q))
-    query_terms = terms(offence_text + " " + " ".join(queries))
+    # Include the user's actual fact pattern in ranking; previously facts were
+    # accepted by this function but were not used to rank retrieved judgments.
+    query_terms = terms(offence_text + " " + (facts or "") + " " + " ".join(queries))
     headers = {"Accept": "application/json", "User-Agent": "MOAI-Legal-Case-Analytics/1.0"}
     async with httpx.AsyncClient(timeout=25, follow_redirects=True) as client:
         async def fetch_search(query):
@@ -404,6 +416,13 @@ async def search_openlegal_nigeria(offence, facts, court_name=None, db=None):
                                     or "robbery and firearm" in law_name
                                 ):
                                     continue
+                                if any(term in offence_lower for term in ("murder", "homicide", "manslaughter")):
+                                    relevant_homicide_law = any(term in law_name for term in (
+                                        "criminal code", "penal code", "evidence act",
+                                        "criminal procedure", "homicide", "murder"
+                                    ))
+                                    if not relevant_homicide_law:
+                                        continue
                                 identity = str(law.get("id") or (
                                     law.get("title", "") + law.get("section", "")
                                 ))
@@ -683,14 +702,20 @@ async def assess_researched_case(payload, jurisdiction_name, research):
         "You are an evidence-grounded legal research and case-outcome assessment assistant. "
         "Use only the submitted facts and retrieved judgments and legislation below. Do not invent case names, "
         "citations, holdings, statutory provisions, sentencing figures, or legal rules. "
-        "Distinguish what the judgments actually say from your inference. Explain material "
-        "similarities and differences, procedural posture, court level, and missing facts. "
-        "Give a cautious conditional assessment of plausible outcomes, not a probability "
-        "unless the supplied evidence supports a real statistical calculation. Never call this "
-        "a trained predictive model. If sources are too few or weak, say the evidence is "
-        "insufficient rather than guessing. Cite each authority using the supplied citation "
-        "and URL. Mention that the source is a legal research service and that certified court copies and "
-        "official legislation must be checked. This is not legal advice."
+        "Distinguish what the judgments actually say from your inference. "
+        "Include a clearly labelled CASE-BY-CASE COMPARISON section. For each retrieved judgment, "
+        "state its exact supplied title and citation, court, material issue/facts actually available, "
+        "decision or holding actually available, similarities to the hypothetical, differences that "
+        "may affect the result, and how far the authority assists. If a detail is absent from the "
+        "retrieved text, say it is not available; do not fill gaps. "
+        "Then include a PROVISIONAL LIKELY-OUTCOME ASSESSMENT with the strongest reasons for and "
+        "against that outcome, the applicable supplied legislation, evidence gaps, and alternative "
+        "possible outcomes. Give a cautious conditional assessment, not a probability unless the "
+        "supplied evidence supports a real statistical calculation. Never call this a trained "
+        "predictive model. If sources are too few or weak, say the evidence is insufficient rather "
+        "than guessing. Cite each authority using the supplied citation and URL. Mention that the "
+        "source is a legal research service and certified court copies and official legislation "
+        "must be checked. This is not legal advice."
     )
     try:
         async with httpx.AsyncClient(timeout=65) as client:
