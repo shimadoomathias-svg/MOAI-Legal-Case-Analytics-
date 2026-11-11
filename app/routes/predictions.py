@@ -349,7 +349,6 @@ async def search_openlegal_nigeria(offence, facts, court_name=None, db=None):
                 "court": row.get("court", ""),
                 "text": " ".join(str(row.get(k, "")) for k in ("holding", "excerpt")),
             }, fact_terms),
-            }),
             reverse=True,
         )[:10]
 
