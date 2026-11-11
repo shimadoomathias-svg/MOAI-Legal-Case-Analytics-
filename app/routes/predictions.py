@@ -154,7 +154,13 @@ def setup_status():
         },
         "legal_sources": [
             {"name": "OpenLegal Nigeria", "jurisdiction": "Nigeria",
-             "configured": True, "credential_required": False, "ready": True},
+             "configured": True, "credential_required": False, "ready": True,
+             "mode": "automated REST API", "coverage_note": "Published judgments indexed by OpenLegal only"},
+            {"name": "Supreme Court of Nigeria judgment portal", "jurisdiction": "Nigeria",
+             "configured": False, "credential_required": False, "ready": False,
+             "mode": "official manual search link only",
+             "url": "https://www.website.supremecourt.gov.ng/judgment",
+             "coverage_note": "No verified public machine-readable API contract; not automatically ingested"},
             {"name": "CourtListener", "jurisdiction": "United States",
              "configured": courtlistener_key, "credential_required": True,
              "ready": courtlistener_key,
@@ -226,7 +232,12 @@ def _cache_is_fresh(record, max_age_days):
     return (now - stored).total_seconds() < max_age_days * 86400
 
 
-def _relevance_score(query_terms, document):
+def _relevance_score(query_terms, document, fact_terms=None):
+    """Return query-term coverage, not Jaccard similarity or legal similarity.
+
+    Long judgments should not be penalised merely for containing more words.
+    Offence/issue terms carry more weight than broad factual vocabulary.
+    """
     searchable = " ".join([
         str(document.get("title", "")),
         str(document.get("citation", "")),
@@ -236,7 +247,10 @@ def _relevance_score(query_terms, document):
     found = terms(searchable)
     if not query_terms or not found:
         return 0.0
-    return round(100 * len(query_terms & found) / len(query_terms | found), 1)
+    issue_coverage = len(query_terms & found) / max(len(query_terms), 1)
+    facts = fact_terms or set()
+    fact_coverage = len(facts & found) / max(len(facts), 1) if facts else issue_coverage
+    return round(100 * (0.7 * issue_coverage + 0.3 * fact_coverage), 1)
 
 
 async def search_openlegal_nigeria(offence, facts, court_name=None, db=None):
@@ -272,7 +286,8 @@ async def search_openlegal_nigeria(offence, facts, court_name=None, db=None):
     queries = list(dict.fromkeys(q for q in query_candidates if q))
     # Include the user's actual fact pattern in ranking; previously facts were
     # accepted by this function but were not used to rank retrieved judgments.
-    query_terms = terms(offence_text + " " + (facts or "") + " " + " ".join(queries))
+    query_terms = terms(offence_text + " " + " ".join(queries))
+    fact_terms = terms(facts or "")
     headers = {"Accept": "application/json", "User-Agent": "MOAI-Legal-Case-Analytics/1.0"}
     async with httpx.AsyncClient(timeout=25, follow_redirects=True) as client:
         async def fetch_search(query):
@@ -301,7 +316,9 @@ async def search_openlegal_nigeria(offence, facts, court_name=None, db=None):
                 if isinstance(row, dict) and row.get("id"):
                     rows_by_id.setdefault(str(row["id"]), row)
         court_filter_relaxed = False
-        if not rows_by_id and court_name:
+        if court_name and len(rows_by_id) < 3:
+            # A selected court is a preference, not a hard gate: sparse source
+            # coverage must not hide useful appellate or other-court authorities.
             court_filter_relaxed = True
             async def fetch_unfiltered(query):
                 response = await client.get(
@@ -331,6 +348,7 @@ async def search_openlegal_nigeria(offence, facts, court_name=None, db=None):
                 "citation": row.get("cite_as", ""),
                 "court": row.get("court", ""),
                 "text": " ".join(str(row.get(k, "")) for k in ("holding", "excerpt")),
+            }, fact_terms),
             }),
             reverse=True,
         )[:10]
@@ -385,7 +403,7 @@ async def search_openlegal_nigeria(offence, facts, court_name=None, db=None):
                 "url": url, "source": "OpenLegal Nigeria", "source_id": source_id,
                 "material_type": "judgment", "text": text, "cached": False,
             }
-            doc["relevance_score"] = _relevance_score(query_terms, doc)
+            doc["relevance_score"] = _relevance_score(query_terms, doc, fact_terms)
             return doc
 
         judgment_docs = await asyncio.gather(*(retrieve_judgment(row) for row in ranked_rows))
@@ -468,7 +486,7 @@ async def search_openlegal_nigeria(offence, facts, court_name=None, db=None):
                     record.content = law_doc["text"]
                     record.retrieved_at = datetime.now(timezone.utc).replace(tzinfo=None)
                     db.add(record)
-            law_doc["relevance_score"] = _relevance_score(query_terms, law_doc)
+            law_doc["relevance_score"] = _relevance_score(query_terms, law_doc, fact_terms)
             law_docs.append(law_doc)
 
         if db is not None:
@@ -488,6 +506,20 @@ async def search_openlegal_nigeria(offence, facts, court_name=None, db=None):
             "judgment_count": len(judgment_docs),
             "legislation_count": len(law_docs),
             "cache_hits": sum(1 for doc in documents if doc.get("cached")),
+            "source_diagnostics": {
+                "provider": "OpenLegal Nigeria",
+                "search_query_count": len(queries),
+                "candidate_judgment_count": len(rows_by_id),
+                "retrieved_judgment_count": len(judgment_docs),
+                "retrieved_legislation_count": len(law_docs),
+                "court_filter_relaxed": court_filter_relaxed,
+                "coverage_warning": (
+                    "The connected public judgment collection is small. A zero-result search "
+                    "is a source-coverage limitation, not proof that no Nigerian authority exists."
+                    if not judgment_docs else
+                    "Search completeness is limited to judgments indexed by the connected provider."
+                ),
+            },
         }
 
 
@@ -855,11 +887,34 @@ async def automated_legal_research(payload: PredictionRequest, db: Session = Dep
         "source_total_matches": research["total"],
         "retrieved_judgment_count": research.get("judgment_count", len(research["documents"])),
         "retrieved_legislation_count": research.get("legislation_count", 0),
-        "research_results": sources,
+        "research_results": [
+            {**item,
+             "source_excerpt": next((d.get("text", "")[:1800] for d in research["documents"]
+                                     if d.get("url") == item["url"]
+                                     and d.get("material_type") == item["material_type"]), "")}
+            for item in sources
+        ],
+        "source_diagnostics": research.get("source_diagnostics", {}),
+        "additional_research_routes": [
+            {
+                "name": "Supreme Court of Nigeria — official judgment search",
+                "url": "https://www.website.supremecourt.gov.ng/judgment",
+                "mode": "manual_official_search",
+                "note": "The portal is searchable by appeal number and subject matter. No authorised machine-readable API has been verified, so MOAI does not scrape or ingest it."
+            },
+            {
+                "name": "Federal Ministry of Justice — Law Reporting Department",
+                "url": "https://justice.gov.ng/law-reporting/",
+                "mode": "official_publication_information",
+                "note": "Official law-reporting and publication information; not a live judgment-search API."
+            }
+        ] if country_code == "NGA" else [],
         "ai_prediction": ai_result,
         "limitations": [
             "This is retrieval-augmented legal analysis, not a trained machine-learning model.",
             "Search results depend on the judgments available in the connected source; absence of a result does not mean no authority exists.",
+            "The official Supreme Court judgment portal is supplied as a manual research route only; no authorised machine-readable API has been verified, so it is not automatically scraped or ingested.",
+            "Retrieval relevance is weighted query-term coverage for ranking only; it is not a legal similarity score or a probability.",
             "A legal research assessment is not a statistical probability or guaranteed court outcome.",
             "Verify judgments against certified court copies and legislation against official gazettes.",
             "The CourtListener connector searches United States opinions; it does not retrieve United States legislation."
