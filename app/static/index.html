@@ -151,7 +151,7 @@ async function loadSetupStatus(){
   $('setupAiModel').textContent='Model: '+d.ai_provider.model+(d.ai_provider.free_model_allowed?' · free routing':' · NOT ALLOWED');
   const us=d.legal_sources.find(x=>x.name==='CourtListener');
   $('setupUsState').textContent=us?.ready?'Ready':'Needs token';
-  box.innerHTML='<ul>'+d.legal_sources.map(s=>'<li><strong>'+esc(s.name)+'</strong> — '+esc(s.jurisdiction)+' — '+(s.ready?'<span style="color:var(--green)">Ready</span>':'<span style="color:var(--muted)">Needs configuration</span>')+(s.credential_required?' · API token required':' · no key required')+'</li>').join('')+'</ul>';
+  box.innerHTML='<ul>'+d.legal_sources.map(s=>'<li><strong>'+esc(s.name)+'</strong> — '+esc(s.jurisdiction)+' — '+(s.mode==='official manual search link only'?'<span style="color:var(--muted)">Manual official portal · not automatically connected</span>':s.ready?'<span style="color:var(--green)">Ready</span>':'<span style="color:var(--muted)">Needs configuration</span>')+(s.credential_required?' · API token required':s.mode==='official manual search link only'?' · no automated API verified':' · no key required')+(s.url?' · <a href="'+esc(s.url)+'" target="_blank" rel="noopener">Open portal</a>':'')+(s.coverage_note?' · '+esc(s.coverage_note):'')+'</li>').join('')+'</ul>';
  }catch(e){box.textContent='Could not read configuration: '+e.message}
 }
 $('refreshSetup').addEventListener('click',loadSetupStatus);
