@@ -43,6 +43,10 @@ The application links to the source judgment pages. OpenLegal is a legal informa
 
 CourtListener's v4 API requires token authentication. The connector searches published opinion clusters, retrieves up to three lead opinions per request, and caches public opinion text for 30 days. CourtListener documents default authenticated limits of 5 requests per minute, 50 per hour and 125 per day; the connector deliberately caps each search to one search request and up to three opinion-detail requests. No United States legislation connector is included yet.
 
+### NigeriaLII — available for manual research; automated integration pending
+
+NigeriaLII's public catalogue lists approximately 1,953 judgments, including decisions from the Supreme Court, Court of Appeal and several High Courts. Its terms permit API access but prohibit scraping and bulk downloading. MOAI currently links to NigeriaLII for manual research only. An authorised API endpoint, access conditions and any required credentials or agreement must be confirmed with the provider before an automated connector can be enabled. No website scraping or guessed endpoints are used.
+
 ### Other jurisdictions — not yet connected
 
 The jurisdiction reference data is present, but an automated research connector is not enabled merely because a jurisdiction appears in the selector. Each jurisdiction needs an authorised source/API and its permitted access method. The application does not scrape sites that prohibit automated access or computational reuse. Where a source requires an API key, account approval or licence, that requirement must be met before enabling it.
