@@ -120,8 +120,15 @@ if(Object.prototype.hasOwnProperty.call(d,'research_results')){
  }else{
   body+='<div class="notice"><strong>AI assessment: '+esc(d.ai_prediction?.status||'not available')+'</strong><br>'+esc(d.ai_prediction?.message||'AI analysis was not completed.')+'</div>';
  }
+ if(d.source_diagnostics){
+  const q=d.source_diagnostics;
+  body+='<div class="notice"><strong>Source diagnostics</strong><br>Candidate judgments found: '+(q.candidate_judgment_count??0)+' · Judgments retrieved: '+(q.retrieved_judgment_count??0)+' · Search queries: '+(q.search_query_count??0)+'<br>'+esc(q.coverage_warning||'')+'</div>';
+ }
  body+='<h3>Retrieved judgments and authorities</h3>';
- body+=d.research_results?.length?'<ul>'+d.research_results.map(x=>'<li><strong>'+esc(x.material_type==='legislation'?'Legislation: ':'Judgment: ')+esc(x.title)+'</strong> · '+esc(x.citation||'Citation not supplied')+' · '+esc(x.court||'')+(x.relevance_score!==undefined?' · Retrieval relevance '+x.relevance_score+'%':'')+(x.url?' · <a href="'+esc(x.url)+'" target="_blank" rel="noopener">Open source</a>':'')+'</li>').join('')+'</ul>':'<p>No matching judgments were returned by the connected source.</p>';
+ body+=d.research_results?.length?'<div class="grid">'+d.research_results.map(x=>'<div class="panel" style="margin:9px 0"><strong>'+esc(x.material_type==='legislation'?'Legislation: ':'Judgment: ')+esc(x.title)+'</strong><p class="sub">'+esc(x.citation||'Citation not supplied')+' · '+esc(x.court||'Court not supplied')+(x.relevance_score!==undefined?' · Retrieval match '+x.relevance_score+'%':'')+'</p>'+(x.source_excerpt?'<p style="white-space:pre-wrap;line-height:1.55">'+esc(x.source_excerpt)+'</p>':'<p class="sub">The connected source did not return a readable text extract for this item.</p>')+(x.url?'<a href="'+esc(x.url)+'" target="_blank" rel="noopener">Open source record</a>':'')+'</div>').join('')+'</div>':'<p>No matching judgments were returned by the connected source.</p>';
+ if(d.additional_research_routes?.length){
+  body+='<h3>Additional official research routes</h3><ul>'+d.additional_research_routes.map(x=>'<li><strong>'+esc(x.name)+'</strong> — '+esc(x.note)+' · <a href="'+esc(x.url)+'" target="_blank" rel="noopener">Open portal</a></li>').join('')+'</ul>';
+ }
  body+='<h3>Research limitations</h3><ul>'+(d.limitations||[]).map(x=>'<li>'+esc(x)+'</li>').join('')+'</ul>';
  out.innerHTML=body;return;
 }
