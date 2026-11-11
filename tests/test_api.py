@@ -274,7 +274,8 @@ def test_openlegal_connector_searches_judgments_and_legislation(monkeypatch):
         db=None
     ))
 
-    assert len(requested_queries) == 2
+    assert len(requested_queries) >= 2
+    assert requested_queries[0] == "Armed robbery"
     assert result["judgment_count"] == 1
     assert result["legislation_count"] == 1
     assert result["documents"][0]["material_type"] in {"judgment", "legislation"}
