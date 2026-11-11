@@ -397,3 +397,25 @@ def test_no_retrieved_material_blocks_ai_prediction(monkeypatch):
         {"documents": []}
     ))
     assert result["status"] == "insufficient_evidence"
+
+
+def test_retrieval_relevance_measures_query_coverage_not_document_length():
+    issue_terms = predictions.terms("murder self defence eyewitness")
+    short = {"title": "Murder self defence", "text": "eyewitness evidence"}
+    long = {
+        "title": "Murder self defence",
+        "text": "eyewitness evidence " + ("unrelated procedural discussion " * 500)
+    }
+    assert predictions._relevance_score(issue_terms, short) == 100.0
+    assert predictions._relevance_score(issue_terms, long) == 100.0
+
+
+def test_retrieval_relevance_can_include_fact_pattern_terms():
+    issue_terms = predictions.terms("murder self defence")
+    facts = predictions.terms("wooden object hospital eyewitness")
+    document = {
+        "title": "State v Example",
+        "text": "Murder self defence eyewitness evidence after hospital treatment with wooden object"
+    }
+    score = predictions._relevance_score(issue_terms, document, facts)
+    assert score > 80
