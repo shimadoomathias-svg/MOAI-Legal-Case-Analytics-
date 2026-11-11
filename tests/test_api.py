@@ -381,7 +381,8 @@ def test_setup_status_never_exposes_secret_values(client, monkeypatch):
     assert "private-courtlistener-secret" not in rendered
     assert payload["ai_provider"]["ready"] is True
     assert payload["legal_sources"][0]["ready"] is True
-    assert payload["legal_sources"][1]["ready"] is True
+    courtlistener = next(x for x in payload["legal_sources"] if x["name"] == "CourtListener")
+    assert courtlistener["ready"] is True
 
 
 def test_no_retrieved_material_blocks_ai_prediction(monkeypatch):
